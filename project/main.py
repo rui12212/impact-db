@@ -7,7 +7,9 @@ from fastapi import FastAPI, Request, BackgroundTasks, HTTPException
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 
-from helpers_audio import pick_audio_from_message; load_dotenv()
+from helpers_audio import pick_audio_from_message
+from audio.audio_preprocess import preprocess_for_stt
+from audio.stt_chunking import split_wav_to_chunks, ms_to_ts; load_dotenv()
 import requests
 import gspread
 from google.oauth2.service_account import Credentials
@@ -66,14 +68,36 @@ def tg_send_message(chat_id: int, text:str):
 def new_id() -> str:
     return str(ulid.new())
 
+
+
 def transcribe(file_path: str) -> tuple[str,float]:
-    with open(file_path, 'rb') as f:
-        tr = oai.audio.transcriptions.create(
-            model='gpt-4o-transcribe',
-            file=f,
-        )
-        text = getattr(tr, 'text', None) or getattr(tr, 'text', '')
-        return text, 0.9
+    # 1 前処理（VADはまず無効で全文残す）
+    # 2 30s + 1.5s overlapでチャンク化
+    # 3 チャンクごとにWhisperへ
+    # 4 連結（タイムスタンプもつける）
+
+    # 1前処理
+    wav = preprocess_for_stt(file_path)
+    # 2チャンク化
+    chunks = split_wav_to_chunks(wav, chunk_ms=30_000, overlap_ms=1_5000)
+    # 3 チャンクごとにWhisperへ
+    texts = []
+    for idx, (cpath, s_ms, e_ms) in  enumerate(chunks, start=1):
+        with open(cpath, 'rb') as f :
+          tr = oai.audio.transcriptions.create(
+              model="gpt-4o-transcribe",
+              file=f,
+              prompt="The audio is in Khmer(km). Write Khmer scripts accurately."
+          )
+        chunk_text = getattr(tr, "text", "") or ""
+        # 区切りをつけて連結
+        texts.append(f"[{ms_to_ts(s_ms)}-{ms_to_ts(e_ms)}] {chunk_text}")
+    
+    full_text = "\n".join(texts).strip()
+    return full_text, 0.9
+
+
+
 
 def translate_km_to_en(text:str) -> tuple[str,str]:
     # 1st: Google Trasnlate
@@ -172,12 +196,8 @@ def create_or_update_notion_page(
     if extra_children:
         children.extend(extra_children)
     
-    # 既存ページの本文を差し替える場合は blocks.children.* API を使いますが
-    # MVPは“作成時に書く”運用でOK
     if page_id:
-         # 更新（プロパティのみ；本文追記したい場合は blocks.children.append を別途呼ぶ）
          notion.pages.update(page_id=page_id, properties=properties)
-         # ここでは追記も再構成も簡潔にするため入れ替えは割愛
          return page_id
     else:
         res = notion.pages.create(
@@ -215,24 +235,9 @@ def process_update(update:Dict[str, Any]):
             with open(src,'wb') as f:
                 for chunk in r.iter_content(8192):
                     f.write(chunk)
+            stt_text_km, stt_conf = transcribe(src)
 
-        from pydub import AudioSegment
-        wav = os.path.join(td, "norm.wav")
-        audio = AudioSegment.from_file(src)
-        audio = audio.set_frame_rate(16000).set_channels(1)
-        audio.export(wav, format="wav")
-
-         # WhisperでのSTT（言語指定なし → kmエラー回避。必要なら prompt でヒント）
-         
-        with open(wav, "rb") as f:
-          tr = oai.audio.transcriptions.create(
-            model='gpt-4o-transcribe',
-            file=f,
-        )
-    # ここに出た時点で wav は消えているが、tr はもう手元にある
-    stt_text_km= getattr(tr,'text','') or ''
-    stt_conf= 0.9 # Whisperはconfを返さないため暫定
-    
+    # そのままtranscribe(src)を呼ぶ（この内部で前処理＆分割&連結）
     
     trans_en_text, trans_src = translate_km_to_en(stt_text_km)
     base_for_classify = trans_en_text or stt_text_km

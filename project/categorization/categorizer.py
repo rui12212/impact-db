@@ -19,7 +19,8 @@ CATEGORIES = [
     "2a:Individual Character",
     "2b:Individual Evaluation",
     "2c:Individual Verification",
-    "2d:Learning of how Student Learn"
+    "2d:Learning of how Student Learn",
+    "fact:Mentioning facts"
 ]
 
 emb = OpenAIEmbeddings(model=EMBED_MODEL)
@@ -72,7 +73,7 @@ def _llm_refine(text_en:str, evidence: List[Dict[str, Any]]) -> Tuple[str, float
     ev = "\n".join([f"[{i+1}] ({e['category']}, score={e['score']:.2f}) {e['example']}" for i ,e in enumerate(evidence)])
     sys =("You are a strict JSON-only classifier for teacher comments."
          "Categories: "+", ".join(CATEGORIES) +"."
-         "Return JSON: {\"category\":\"...\",\"confidence\":0~1,\rationale\":\"...\"}.")
+         "Return JSON: {\"category\":\"...\",\"confidence\":0~1,\"rationale\":\"...\"}.")
     usr = f"Nearest examples:\n{ev}\n\nClassify the input into ONE category:\n---\n{text_en}\n---"
     resp = llm.invoke([{"role":"system", "content": sys}, {"role":"user", "content":usr}])
 
