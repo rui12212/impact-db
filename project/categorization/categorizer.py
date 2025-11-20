@@ -19,7 +19,8 @@ CATEGORIES = [
     "2a:Individual Character",
     "2b:Individual Evaluation",
     "2c:Individual Verification",
-    "2d:Learning of how Student Learn"
+    "2d:Learning of how Student Learn",
+    "fact:Mentioning facts"
 ]
 
 emb = OpenAIEmbeddings(model=EMBED_MODEL)
