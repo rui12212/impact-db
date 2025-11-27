@@ -5,12 +5,13 @@ from pathlib import Path
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_chroma import Chroma
 from langchain.schema import Document
-
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+SEED_FILE = os.getenv("CATEGORY_SEED_FILE", "seed_categories.json")
 # ====Settings====
 EMBED_MODEL=os.getenv("OPENAI_EMBED_MODEL")
 LLM_MODEL=os.getenv("OPENAI_LLM_MODEL")
 CHROMA_DIR=os.getenv("CHROMA_DIR")
-SEED_PATH=os.getenv("CATEGORY_SEED_PATH")
+SEED_PATH = os.path.join(BASE_DIR, SEED_FILE)
 CATEGORY_MODE=os.getenv("CATEGORY_MODE")
 
 CATEGORIES = [

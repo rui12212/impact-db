@@ -30,14 +30,14 @@ def pick_audio_from_message(msg: Dict[str, Any])-> Optional[Dict[str,Any]]:
             }
     
     # 3:Voice Message
-    # voice = msg.get("voice")
-    # if voice and voice.get("file_id"):
-    #     return {
-    #         "file_id": voice["file_id"],
-    #         "duration": voice.get("duration"),
-    #         "source": "voice",
-    #         "file_name": None,
-    #         "mime_type": "audio/ogg",
-    #     }
+    voice = msg.get("voice")
+    if voice and voice.get("file_id"):
+        return {
+            "file_id": voice["file_id"],
+            "duration": voice.get("duration"),
+            "source": "voice",
+            "file_name": None,
+            "mime_type": "audio/ogg",
+        }
     
     return None
