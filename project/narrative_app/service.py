@@ -1,7 +1,11 @@
 from dataclasses import dataclass
+import os
+import tempfile
 from typing import Optional
 from datetime import datetime, timezone
 import logging
+
+import requests
 
 from narrative_app.notion_repos import (
     get_or_create_school_by_chat,
@@ -10,9 +14,18 @@ from narrative_app.notion_repos import (
     create_narrative,
     append_to_narrative,
     close_narrative,
+    update_narrative_tags,
 )
 
 from narrative_app.grouping import is_within_window, parse_iso, to_iso
+from core.notion_client import get_notion_client
+from narrative_app.classification import classify_subject
+from core.telegram_helper import tg_get_file_url
+from core.config import NARRATIVE_TELEGRAM_BOT_TOKEN
+from core.audio.helpers_audio import pick_audio_from_message
+from core.audio.stt_translate import transcribe, translate_km_to_en
+
+narrative_bot_token = NARRATIVE_TELEGRAM_BOT_TOKEN
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +82,23 @@ def resolve_teacher(user: TelegramUserInfo, school_page_id:str) -> str:
     )
     return teacher_page_id
 
+# For classify the subject-tags
+def enrich_narrative_with_tags(narrative_page_id: str) -> None:
+    # retrive the raw-text of selected narrative_page_id
+    # Select/Reflect the subject-tag based on the LLM
+    notion = get_notion_client()
+
+    page = notion.pages.retrieve(narrative_page_id)
+    props = page.get("properties", {})
+    rich = props.get("Raw Text", {}).get("rich_text",[])
+    raw_text = "".join([r.get("plain_text") for r in rich])
+
+    subject_tag = classify_subject(raw_text)
+
+    update_narrative_tags(
+        narrative_page_id = narrative_page_id,
+        subject_tag = subject_tag,
+    )
 
 @dataclass
 class NarrativeDecisionResult:
@@ -86,7 +116,7 @@ def decide_and_get_narrative(
 ) -> NarrativeDecisionResult:
     # About the specific teacher,
     # if it is within the time-window, add data to the existing&open Narraive DB
-    # if not, close the existing Narrative DB and create new record tot the page, and return Narrative ID
+    # if not, close the existing Narrative DB and create new record to the page, and return Narrative ID
     
     # message_dt is timezone-aware(UTC)
     if message_dt.tzinfo is None:
@@ -144,9 +174,12 @@ def decide_and_get_narrative(
         end_timestamp_iso=end_iso,
     )
 
+    # 4: If the time-window is closed, the subject-tag will be provided
+    enrich_narrative_with_tags(narrative_page_id_old)
+
     # create New narrative
     start_iso_new=to_iso(message_dt)
-    title- "New Practice"
+    title= "New Practice"
     narrative_page_id_new = create_narrative(
         teacher_page_id=teacher_page_id,
         school_page_id=school_page_id,
@@ -185,11 +218,35 @@ def handle_telegram_update(update:dict) -> None:
         else:
             message_dt = datetime.fromtimestamp(date_ts, tz=timezone.utc)
         
-        # Set text from the telegram to the narrative DB
-        text = message.get("text") or ""
+        
+        # === Voice Message & Text Message -> STT & Translate===
+        text = message.get("text")
+        if text:
+            translated_text = translate_km_to_en(text)
+            text = translated_text[0]
+        
         if not text:
-            # Music/Pics/Videos will be added later
-            logger.info("No text in message. Skipping for now")
+           voice = pick_audio_from_message(message)
+           if voice and "file_id" in voice:
+               file_id = voice["file_id"]
+               logger.info("Received voice message, file_id=%s", file_id)
+           
+               file_url = tg_get_file_url(file_id, narrative_bot_token)
+               with tempfile.TemporaryDirectory() as td:
+                   src = os.path.join(td, (voice.get("file_name") or "in.bin"))
+                   with requests.get(file_url, stream=True, timeout=180) as r:
+                       r.raise_for_status()
+                       with open(src,'wb') as f:
+                              for chunk in r.iter_content(8192):
+                               f.write(chunk)
+                   stt_text_km, stt_conf = transcribe(src)
+               
+               translate_en_text, trans_src = translate_km_to_en(stt_text_km)
+               text = translate_en_text[0]
+        
+        # Music/Pics/Videos will be added later
+        if not text:
+            logger.info("No usable text from message (no text/voice). Skipping")
             return 
         
         user_info = TelegramUserInfo(

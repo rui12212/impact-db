@@ -14,6 +14,7 @@ CHROMA_DIR=os.getenv("CHROMA_DIR")
 SEED_PATH = os.path.join(BASE_DIR, SEED_FILE)
 CATEGORY_MODE=os.getenv("CATEGORY_MODE")
 
+# ===Categorize teachers' comment into 6 types===
 CATEGORIES = [
     "0:Teacher/Methods",
     "1:Mass Students",
@@ -99,3 +100,32 @@ def categorize(text_en:str) -> Dict[str,Any]:
     final_cat = cat or base_cat
     final_conf = max(conf_embed, conf_llm) if conf_llm else conf_embed
     return {"category": final_cat, "confidence": float(final_conf), "evidence":ev[:3], "rationale": rat}
+
+
+
+
+# === *No USE!! Basic structure of Using Open AI ===
+# CATEGORIES = ["praise", "specific_advice", "open_question", "directive", "observation"]
+
+# def classify(en_text:str)-> Tuple[Dict[str,Any], bool]:
+#     # GPTへの司令
+#     sys = (
+#         'Classify teacher feedback into categories:'
+#         +','.join(CATEGORIES)
+#         +'. Respond JSON: {\'labels\':[], \'confidence\':0-1, \'rationale\':\'...\'}'
+#     )
+#     r = oai.chat.completions.create(
+#         model='gpt-4o-mini',
+#         messages=[
+#             {'role': 'system', 'content': sys},
+#             {'role':'user', 'content': f'Text:\n{en_text}\nOutput JSON only.'}
+#         ],
+#         temperature=0.2
+#     )
+#     raw=r.choices[0].message.content.strip()
+#     try:
+#         data = json.loads(raw)
+#     except Exception:
+#         data = {'labels': [], 'confidence':0.5, 'rationale': raw}
+#     need_review = (data.get('confidence', 0) < 0.7) or (not data.get('label'))
+#     return data, need_review
