@@ -1,4 +1,4 @@
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 from core.notion_client import get_notion_client
 from core.config import (
@@ -90,6 +90,30 @@ def get_or_create_teacher_by_telegram(
     )
     return create_resp["id"]
 
+# Update SUbject tags of Narrative DB
+def update_narrative_tags(
+        narrative_page_id: str,
+        subject_tag: str,
+) -> None:
+    # Set Subject-Tag to NarrativeDB in Notion
+    # Existing tags will be updated via this func
+    notion = get_notion_client()
+
+    # subject_select = [{"name": tag} for tag in subject_tags]
+    subject_select = {"name":subject_tag}
+
+    notion.pages.update(
+        **{
+            "page_id": narrative_page_id,
+            "properties": {
+                "Subject Tag": {
+                    "select": subject_select,
+                }
+            }
+        }
+    )
+
+
 # Narrative related
 def get_open_narrative_for_teacher(teacher_page_id:str) -> Optional[Dict[str, Any]]:
     # Check the time-window, if it no closed, return the Narrative for teacher. If no, None
@@ -150,7 +174,7 @@ def create_narrative(
 def append_to_narrative(
         narrative_page_id: str,
         additional_text: str,) -> None:
-    # Add text to the Rawtext of existing Narraive
+    # Add Text/STT to the Rawtext of existing Narraive
     notion = get_notion_client()
 
     # Get the Rawtext
