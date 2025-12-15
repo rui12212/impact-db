@@ -7,13 +7,15 @@ import logging
 
 import requests
 
-from narrative_app.notion_repos import (
+from narrative_app.notion_repos.notion_repos import (
+    append_media_to_narrative,
     get_or_create_school_by_chat,
     get_or_create_teacher_by_telegram,
     get_open_narrative_for_teacher,
     create_narrative,
-    append_to_narrative,
+    append_and_update_narrative_children,
     close_narrative,
+    get_raw_text_from_narrative,
     update_narrative_tags,
 )
 
@@ -24,6 +26,8 @@ from core.telegram_helper import tg_get_file_url
 from core.config import NARRATIVE_TELEGRAM_BOT_TOKEN
 from core.audio.helpers_audio import pick_audio_from_message
 from core.audio.stt_translate import transcribe, translate_km_to_en
+from narrative_app.service_staff_narrative import sync_staff_narrative_from_narrative
+from core.locks import get_teacher_lock
 
 narrative_bot_token = NARRATIVE_TELEGRAM_BOT_TOKEN
 
@@ -86,13 +90,8 @@ def resolve_teacher(user: TelegramUserInfo, school_page_id:str) -> str:
 def enrich_narrative_with_tags(narrative_page_id: str) -> None:
     # retrive the raw-text of selected narrative_page_id
     # Select/Reflect the subject-tag based on the LLM
-    notion = get_notion_client()
 
-    page = notion.pages.retrieve(narrative_page_id)
-    props = page.get("properties", {})
-    rich = props.get("Raw Text", {}).get("rich_text",[])
-    raw_text = "".join([r.get("plain_text") for r in rich])
-
+    raw_text = get_raw_text_from_narrative(narrative_page_id)
     subject_tag = classify_subject(raw_text)
 
     update_narrative_tags(
@@ -156,7 +155,7 @@ def decide_and_get_narrative(
     if is_within_window(first_ts, message_dt):
         # if it is within time-window, update and add raw text
         narrative_page_id = open_narrative["id"]
-        append_to_narrative(
+        append_and_update_narrative_children(
             narrative_page_id = narrative_page_id,
             additional_text=text,
         )
@@ -166,13 +165,25 @@ def decide_and_get_narrative(
             started_at = first_ts,
         )
     
+    
     # 3: when the time-window is out-> close the Old Narrative and create new record
     narrative_page_id_old = open_narrative["id"]
     end_iso = to_iso(message_dt)
+
     close_narrative(
         narrative_page_id=narrative_page_id_old,
         end_timestamp_iso=end_iso,
     )
+
+    # Update staff_narrative based on the closed Narrative
+    try:
+        sync_staff_narrative_from_narrative(narrative_page_id_old)
+    except Exception as e:
+        logger.exception(
+            "failed to sync staff narrative from closed narrative %s:%s",
+            narrative_page_id_old,
+            e,
+        )
 
     # 4: If the time-window is closed, the subject-tag will be provided
     enrich_narrative_with_tags(narrative_page_id_old)
@@ -202,7 +213,7 @@ def handle_telegram_update(update:dict) -> None:
     # 25th Nov 2025: Support Only text
     # Music/Video/Voice will be coded later
     try:
-        message=update.get("message") or update.get("edited_massage")
+        message=update.get("message") or update.get("edited_message")
         if not message:
              logger.info("No message in update, skipping. update_keys=%s", list(update.keys()))
              return
@@ -242,12 +253,26 @@ def handle_telegram_update(update:dict) -> None:
                    stt_text_km, stt_conf = transcribe(src)
                
                translate_en_text, trans_src = translate_km_to_en(stt_text_km)
-               text = translate_en_text[0]
+               text = translate_en_text
         
-        # Music/Pics/Videos will be added later
-        if not text:
-            logger.info("No usable text from message (no text/voice). Skipping")
-            return 
+        # photo/video will be handled with file_id
+        media_files: list[tuple[str,str]] = [] #[(kind, file_id)]
+
+        photos = message.get("photo") or []
+        if photos:
+            largest_photo = photos[-1]
+            if "file_id" in largest_photo:
+                media_files.append(("photo", largest_photo["file_id"]))
+        
+        video = message.get("video")
+        if video and "file_id" in video:
+            media_files.append(("video", video["file_id"]))
+        
+        # Skip process if there is not text nor media
+        if not text and not media_files:
+            logger.info("No usable text or media in message. Skipping")
+            return
+    
         
         user_info = TelegramUserInfo(
             user_id= from_user["id"],
@@ -265,19 +290,50 @@ def handle_telegram_update(update:dict) -> None:
         school_id = resolve_school(chat_info)
         teacher_id = resolve_teacher(user_info, school_id)
 
-        result = decide_and_get_narrative(
+        # Lock for each teachers
+        teacher_lock = get_teacher_lock(teacher_id)
+
+        with teacher_lock:
+            result = decide_and_get_narrative(
             teacher_page_id=teacher_id,
             school_page_id=school_id,
             message_dt=message_dt,
             text=text,
-        )
-
+            )
         logger.info(
             "Saved narrative: page_id=%s is_new=%s, started_at=%s",
             result.narrative_page_id,
             result.is_new,
             result.started_at.isoformat(),
-        )
+            )
+        
+        narrative_page_id = result.narrative_page_id
+
+        # Add Media(photo/video) to Media Property on Narrative DB
+        for kind, file_id in media_files:
+            try:
+                url = tg_get_file_url(file_id, narrative_bot_token)
+                name = "Photo" if kind == "photo" else "Video"
+                # logger.info(f"narrative_page_id={narrative_page_id} type={type(narrative_page_id)}")
+                append_media_to_narrative(
+                    narrative_page_id=narrative_page_id,
+                    media_url=url,
+                    name=name,
+                )
+                logger.info(
+                    "Appended media to narrative=%s kind=%s url=%s",
+                    narrative_page_id,
+                    kind,
+                    url,
+                )
+            except Exception as e :
+                logger.exception(
+                    "Failed to append media(kind=%s, file_id=%s) to narrative %s: %s",
+                    kind,
+                    file_id,
+                    narrative_page_id,
+                    e,
+                )
     except Exception as e:
         logger.exception("Exception while handling Telegram update: %s", e)
         # exception will be handled by putting log in the logger

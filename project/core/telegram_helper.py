@@ -1,12 +1,13 @@
 
 # ===== Telegram Helpers =====
 import logging
-from typing import Any, Dict
-
+from typing import Any, Dict, Tuple
 import requests
 import ulid
 class TelegramFileDownloadError(Exception):
     pass
+
+from core.config import NARRATIVE_TELEGRAM_BOT_TOKEN
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger('impactdb'
@@ -42,3 +43,9 @@ def tg_send_message(chat_id:int, token:str,text:str):
 
 def new_id() -> str:
     return str(ulid.new())
+
+# def get_file_url(file_id: str, token:str) -> str:
+#     # get the furl which can access to the media data based on the telegram url
+#     file_path = tg_get_file_url(file_id, token)
+#     file_url = f"https://api.telegram.org/file/bot{token}/{file_path}"
+#     return file_url

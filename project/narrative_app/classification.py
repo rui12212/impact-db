@@ -1,4 +1,4 @@
-from typing import List, Tuple, Any
+from typing import List, Tuple, Any, Optional
 import json
 import logging
 
@@ -18,7 +18,7 @@ SUBJECT_TAGS = [
 from openai import OpenAI
 client = OpenAI()
 
-def classify_subject(raw_text:str) -> str:
+def classify_subject(raw_text:str) -> Optional[str]:
     # recommend Subject-Tags based on the raw_text
     # return subject_tags;
     if not raw_text.strip():
@@ -29,21 +29,21 @@ def classify_subject(raw_text:str) -> str:
         "From the given text, choose appropriate subject tags"
         "from the provided lists"
         "Only use tags from the lists. Return a JSON object with fields"
-        '"subject_tags" with a list of strings'
+        '"subject_tags" with  string'
     )
 
     user_prompt=f"""
     
 [TEXT]
-{raw_text}"
+{raw_text}
 
 [AVAILABLE SUBJECT TAGS]
 {",".join(SUBJECT_TAGS)}
     
 Rules:
 - Only use tags from the available lists.
-- subject_tags: choose only one tag that fit best
-- If unsure, return Return JSON like: "subject_tags":"None"
+- subject_tags: choose only ONE tag that fit best
+- If unsure, set subject_tags to ""(empty string).
 
 Return JSON like:
 {{
@@ -65,8 +65,22 @@ Return JSON like:
       subject_json_data = json.loads(content)
       subject_tag = subject_json_data.get("subject_tags","")
 
-      if subject_tag == "None" or not subject_tag:
-         return "None"
+      if isinstance(subject_tag, list):
+         if not subject_tag:
+            return None
+         subject_tag = subject_tag[0]
+
+      if not isinstance(subject_tag, str):
+         logger.warning("subject_tags is not str or list: %r", subject_tag)
+         return None
+      
+      subject_tag = subject_tag.strip()
+      if not subject_tag:
+         return None
+      
+      if subject_tag not in SUBJECT_TAGS:
+         logger.warning("Unknown subject tag from LLM: %s",subject_tag)
+         return None
       
       return subject_tag
     except Exception as e:
