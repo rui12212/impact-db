@@ -1,5 +1,5 @@
 from typing import Optional, Dict, Any, List
-
+import logging
 from core.notion_client import get_notion_client
 from core.config import (
     NOTION_SCHOOLS_DB_ID,
@@ -7,6 +7,8 @@ from core.config import (
     NOTION_NARRATIVES_DB_ID,
 )
 from narrative_app.summarization import generate_detailed_content, generate_summary
+
+logger = logging.getLogger(__name__)
 
 # School Related
 def get_or_create_school_by_chat(chat_id: int, chat_title:str) -> str:
@@ -92,14 +94,56 @@ def get_or_create_teacher_by_telegram(
     return create_resp["id"]
 
 # Add summary/detailed/media in "New Practice" of Narrative DB
-def append_summary_detail_to_narrative_children(
+def append_summary_detail_media_to_narrative_children(
         narrative_page_id : str,
         summary_text: str,
         detailed_text: str,
-        media_placeholder: str = "media section (to be filled later).",
+        media_items: Optional[List[tuple[str,str]]] = None,
 )-> None:
     # make three sections on Staff Narrative Page (Summary/Detailed/Media)
     notion = get_notion_client()
+    media_blocks: list[dict] = []
+
+    if media_items:
+        
+        for kind, url, in media_items:
+          logger.info(f"kind={kind} url={url}")
+          kind_lower = (kind or "").lower()
+
+          if "photo" in kind_lower or "image" in kind_lower:
+            block_type = "image"
+            body_key = "image"
+          elif "video" in kind_lower:
+            block_type = "video"
+            body_key = "video"
+          else:
+            block_type = "file"
+            body_key = "file"
+          
+          media_blocks.append({
+             "object": "block",
+              "type": block_type,
+              body_key: {
+                  "type": "external",
+                  "external": {"url": url},
+              },  
+          })
+    else:
+        media_blocks.append({
+            # If there is no media
+            "object": "block",
+            "type": "paragraph",
+            "paragraph": {
+                "rich_text": [
+                    {
+                        "type": "text",
+                        "text": {
+                            "content": "Media section (no photos/videos)"
+                        },
+                    }
+                ]
+            },
+        })
 
     children = [
         # Summary
@@ -150,17 +194,7 @@ def append_summary_detail_to_narrative_children(
                 ]
             },
         },
-        {
-            "object": "block",
-            "type": "paragraph",
-            "paragraph": {
-                "rich_text": [
-                    {"type":"text",
-                     "text": {"content": media_placeholder or ""},
-                    }
-                ]
-            },
-        },
+        *media_blocks
     ]
 
     notion.blocks.children.append(
@@ -372,11 +406,71 @@ def append_and_update_narrative_children(narrative_page_id: str, additional_text
                 "rich_text": rich_text,
             },
         )
+        
+def append_media_to_narrative(
+        narrative_page_id: str,
+        media_url: str,
+        name: Optional[str] = None,
+) -> None:
+    # put ONE url into the Media property of Narrative DB
+    # media_url: Telegram's file url
+    # name: the displayed name on Notion
+    notion = get_notion_client()
+    page = notion.pages.retrieve(narrative_page_id)
+    props = page.get("properties", {})
+    media_prop = props.get("Media", {})
+
+    existing_files = media_prop.get("files", []) or []
+
+    new_file = {
+        "name": name or "media",
+        "external": {"url": media_url},
+    }
+    new_files = existing_files + [new_file]
+
+    notion.pages.update(
+        **{
+            "page_id": narrative_page_id,
+            "properties": {
+                "Media": {
+                    "files": new_files,
+                }
+            }
+        }
+    )
+
+def _extract_media_items_from_narrative(page:Dict) -> List[tuple[str,str]]:
+    # get {kind, url} and make List from Media property of the Narrative Db
+    props = page.get("properties", {})
+    media_prop = props.get("Media",{})
+    files = media_prop.get("files", []) or []
+
+    items: List[tuple[str,str]] = []
+
+    for f in files:
+        name = (f.get("name") or "").lower()
+        external = f.get("external") or f.get("file") or {}
+        url = external.get("url")
+        if not url:
+            continue
+
+
+        if "photo" in name or "image" in name:
+            kind = "photo"
+        elif "video" in name:
+            kind = "video"
+        else:
+            kind = "file"
+        
+        items.append({kind, url})
+        
+    return items
+
 
 def close_narrative(
         narrative_page_id: str,
         end_timestamp_iso: str,
-        media_placeholder: str = "media section (to be filled later).",
+        # media_items: Optional[List[tuple[str,str]]] = None,
 ) -> str:
     # Close the existing narrative. Is Closed = True, update Notion property "Date" to "end"
     notion = get_notion_client()
@@ -403,13 +497,17 @@ def close_narrative(
     # Makling chunks so that it will not exceed 2000 length limit of the str
     chunked_summary_text = text_to_rich_text_blocks(summary_text)
     chunked_detailed_text = text_to_rich_text_blocks(detailed_text)
+
+    media_items = _extract_media_items_from_narrative(page)
+    if not media_items:
+        logger.info("No media has been uploaded")
     
     # Update the page Summary / Detailed / Media
-    append_summary_detail_to_narrative_children(
+    append_summary_detail_media_to_narrative_children(
         narrative_page_id=narrative_page_id,
         summary_text=chunked_summary_text,
         detailed_text=chunked_detailed_text,
-        media_placeholder="Media section (to be filled with phots/videos)",
+        media_items=media_items,
     )
     
     notion.pages.update(

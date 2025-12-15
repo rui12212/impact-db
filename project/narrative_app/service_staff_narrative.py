@@ -66,6 +66,7 @@ def sync_staff_narrative_from_narrative(narrative_page_id: str) -> None:
     raw_text = _extract_raw_text_from_narrative(page)
     subject_names = _extract_subject_names_from_narrative(page)
     subject_page_ids = resolve_subject_ids(subject_names) if subject_names else []
+    
 
     # Retrieve or create new Staff Narrative DB record for the targeted school
     staff_page_id = get_or_create_staff_narrative_for_school(school_page_id)
