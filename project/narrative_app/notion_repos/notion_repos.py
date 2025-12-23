@@ -7,8 +7,12 @@ from core.config import (
     NOTION_NARRATIVES_DB_ID,
 )
 from narrative_app.summarization import generate_detailed_content, generate_summary
+from urllib.parse import urlparse
 
+from core.telegram_helper import tg_get_file_url
+from core.config import NARRATIVE_TELEGRAM_BOT_TOKEN
 logger = logging.getLogger(__name__)
+narrative_bot_token = NARRATIVE_TELEGRAM_BOT_TOKEN
 
 # School Related
 def get_or_create_school_by_chat(chat_id: int, chat_title:str) -> str:
@@ -93,6 +97,13 @@ def get_or_create_teacher_by_telegram(
     )
     return create_resp["id"]
 
+def is_http_url(s: str) -> bool:
+    try:
+        u = urlparse(s)
+        return u.scheme in ("http","https") and bool(u.netloc)
+    except Exception:
+        return False
+
 # Add summary/detailed/media in "New Practice" of Narrative DB
 def append_summary_detail_media_to_narrative_children(
         narrative_page_id : str,
@@ -105,29 +116,43 @@ def append_summary_detail_media_to_narrative_children(
     media_blocks: list[dict] = []
 
     if media_items:
-        
-        for kind, url, in media_items:
-          logger.info(f"kind={kind} url={url}")
-          kind_lower = (kind or "").lower()
+        for kind, maybe_url_or_file_id in media_items:
+            kind_lower = (kind or "").lower()
+            s = (maybe_url_or_file_id or "").strip()
 
-          if "photo" in kind_lower or "image" in kind_lower:
-            block_type = "image"
-            body_key = "image"
-          elif "video" in kind_lower:
-            block_type = "video"
-            body_key = "video"
-          else:
-            block_type = "file"
-            body_key = "file"
-          
-          media_blocks.append({
-             "object": "block",
-              "type": block_type,
-              body_key: {
-                  "type": "external",
-                  "external": {"url": url},
-              },  
-          })
+            if not is_http_url(s):
+                try:
+                    s = tg_get_file_url(s, narrative_bot_token)
+                except Exception as e:
+                    logger.exception("Failed to convert file_id to url. kind=%s value=%s err=%s",
+                                     kind, maybe_url_or_file_id, e)
+                    media_blocks.append({
+                        "object": "block",
+                        "type": "paragraph",
+                        "paragraph": {"rich_text": [{
+                            "type": "text",
+                            "text": {"content": f"[media skipped] kind={kind} value={maybe_url_or_file_id}"}
+                        }]}
+                    })
+                    continue
+            url = s
+            logger.info("media kind=%s url=%s", kind, url)
+
+            if "photo" in kind_lower or "image" in kind_lower:
+                block_type, body_key = "image", "image"
+            elif "video" in kind_lower:
+                block_type, body_key = "video", "video"
+            else:
+                block_type, body_key = "file", "file"
+
+            media_blocks.append({
+                "object": "block",
+                "type": block_type,
+                body_key: {
+                    "type": "external",
+                    "external": {"url": url},
+                },
+            })
     else:
         media_blocks.append({
             # If there is no media

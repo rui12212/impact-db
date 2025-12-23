@@ -232,6 +232,10 @@ def handle_telegram_update(update:dict) -> None:
         
         # === Voice Message & Text Message -> STT & Translate===
         text = message.get("text")
+        logger.info("message_keys=%s", list(message.keys()))
+        logger.info("has_photo=%s has_video=%s has_document=%s has_new_chat_photo=%s",
+            "photo" in message, "video" in message, "document" in message, "new_chat_photo" in message)
+
         if text:
             translated_text = translate_km_to_en(text)
             text = translated_text[0]
@@ -267,6 +271,26 @@ def handle_telegram_update(update:dict) -> None:
         video = message.get("video")
         if video and "file_id" in video:
             media_files.append(("video", video["file_id"]))
+        
+        # document (sent as file) *ex, Drag&Drop from PC to telegram
+        doc = message.get("document")
+        if doc and "file_id" in doc:
+            mime = (doc.get("mime_type") or "").lower()
+            file_name = (doc.get("file_name") or "").lower()
+
+            # priority first: mime_type
+            if mime.startswith("image/"):
+                media_files.append(("photo", doc["file_id"]))
+            elif mime.startswith("video/"):
+                media_files.append(("video", doc["file_id"]))
+            else:
+                # if mime_type is empty or unclear, making sure with the extension
+                if file_name.endswith((".jpg", ".jpeg", ".png", ".JPEG", ".JPG", ".PNG", ".webp", ".heic", ".HEIC")):
+                    media_files.append(("photo", doc["file_id"]))
+                elif file_name.endswith((".mp4", ".mov", ".MP4", ".MOV", ".m4v", ".M4V", "webm", "WEBM")):
+                    media_files.append(("video", doc["file_id"]))
+                else:
+                    media_files.append(("document", doc["file_id"]))
         
         # Skip process if there is not text nor media
         if not text and not media_files:
