@@ -58,7 +58,7 @@ def _make_child_database(parent_page_id: str) -> str:
                     {"name":"Learning of how Student Learn","color":"blue"},
                 ]
             }},
-            "CategoryConfidence": {"number": {"format":"number"}},
+            # "CategoryConfidence": {"number": {"format":"number"}},
             "AudioURL": {"url": {}},
             "ChatID": {"number": {}},
             "MessageID": {"number": {}},

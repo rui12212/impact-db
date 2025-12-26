@@ -6,7 +6,7 @@ from typing import Any, Dict
 import requests
 
 from core.audio.helpers_audio import pick_audio_from_message
-from core.audio.stt_translate import transcribe, translate_km_to_en
+from core.audio.stt_translate import decide_transcribe_model, oai_transcribe, oai_translate_km_to_en
 from impact_app.categorization.categorizer import categorize
 from impact_app.notion.notion_client import create_or_update_notion_page, ensure_training_space
 from core.telegram_helper import tg_get_file_url, tg_send_message
@@ -54,18 +54,17 @@ def impact_process_update(update:Dict[str, Any]):
             with open(src,'wb') as f:
                 for chunk in r.iter_content(8192):
                     f.write(chunk)
-        
-        #--- SST(chunking & Preprocess) using transcribe---
-        stt_text_km, stt_conf = transcribe(src)
+
+        #--- Chunking & Preprocess & Transcribe & Translate---
+        # ★Set model name in str : "oai","assemblyai","gladia" ,"elevenlabs","gemini"
+        stt_text_km, translated_en_text = decide_transcribe_model(src, "gemini")
     
-    # ---Translate---
-    trans_en_text, trans_src = translate_km_to_en(stt_text_km)
-    base_for_classify = trans_en_text or stt_text_km
+    base_for_classify = translated_en_text or stt_text_km
 
     #--- Classification using Open AI Embedding/ OpenAI---
     cat_res = categorize(base_for_classify)
     category = cat_res["category"]
-    category_conf = float(cat_res["confidence"])
+    # category_conf = float(cat_res["confidence"])
     evidence = cat_res.get("evidence", [])
     rationale = cat_res.get("rationale", "")
 
@@ -89,9 +88,9 @@ def impact_process_update(update:Dict[str, Any]):
         "Name": {'title': [{'type':'text', 'text':{'content': name_no_ext}}]},
         "Date": {'date': {'start':now_iso}},
         "STT_Km": rt_prop(stt_text_km),
-        "Translated_En": rt_prop(trans_en_text),
+        "Translated_En": rt_prop(translated_en_text),
         "Category": {"select":{"name": category}},
-        "CategoryConfidence": {"number": category_conf},
+        # "CategoryConfidence": {"number": category_conf},
         "AudioURL":{'url': file_url},
         "ChatID": {'number': chat_id if chat_id is not None else 0},
         "MessageID": {'number': message_id if message_id is not None else 0},
@@ -120,7 +119,7 @@ def impact_process_update(update:Dict[str, Any]):
     
     # Save the date to child DB of each Training
     page_id = create_or_update_notion_page(
-        training_db_id,props, stt_text_km, trans_en_text, extra_children
+        training_db_id,props, stt_text_km, translated_en_text, extra_children
     )
     
     if chat_id:
