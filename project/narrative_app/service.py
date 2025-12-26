@@ -25,7 +25,7 @@ from narrative_app.classification import classify_subject
 from core.telegram_helper import tg_get_file_url
 from core.config import NARRATIVE_TELEGRAM_BOT_TOKEN
 from core.audio.helpers_audio import pick_audio_from_message
-from core.audio.stt_translate import transcribe, translate_km_to_en
+from core.audio.stt_translate import oai_transcribe, oai_translate_km_to_en
 from narrative_app.service_staff_narrative import sync_staff_narrative_from_narrative
 from core.locks import get_teacher_lock
 
@@ -237,7 +237,7 @@ def handle_telegram_update(update:dict) -> None:
             "photo" in message, "video" in message, "document" in message, "new_chat_photo" in message)
 
         if text:
-            translated_text = translate_km_to_en(text)
+            translated_text = oai_translate_km_to_en(text)
             text = translated_text[0]
         
         if not text:
@@ -254,9 +254,9 @@ def handle_telegram_update(update:dict) -> None:
                        with open(src,'wb') as f:
                               for chunk in r.iter_content(8192):
                                f.write(chunk)
-                   stt_text_km, stt_conf = transcribe(src)
+                   stt_text_km, stt_conf = oai_transcribe(src)
                
-               translate_en_text, trans_src = translate_km_to_en(stt_text_km)
+               translate_en_text, trans_src = oai_translate_km_to_en(stt_text_km)
                text = translate_en_text
         
         # photo/video will be handled with file_id
