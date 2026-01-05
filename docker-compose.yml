@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: impact-narrative-db
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount .env file
+      - ./.env.test:/app/.env
+      # Mount Google Cloud credentials
+      - ./credentials:/app/credentials:ro
+      # Mount ChromaDB data directory (persistent)
+      - ./.chroma_categories:/app/.chroma_categories
+      # Mount runtime data directory (persistent)
+      - ./.runtime:/app/.runtime
+    environment:
+      - ENVIRONMENT=test
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
