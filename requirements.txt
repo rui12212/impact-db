@@ -7,3 +7,5 @@ gspread==6.1.2
 google-auth==2.33.0
 google-cloud-translate==3.15.5
 ulid-py==1.1.0
+notion-client==2.2.1
+chromadb==0.4.22
