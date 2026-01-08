@@ -1,4 +1,28 @@
-# Use Python 3.10 slim image as base
+# Build stage
+FROM python:3.10-slim as builder
+
+# Set environment variables to prevent interactive prompts
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TERM=linux
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    make \
+    python3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /app
+
+# Copy requirements file
+COPY requirements.txt .
+
+# Install Python dependencies to /install
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+# Runtime stage
 FROM python:3.10-slim
 
 # Set environment variables to prevent interactive prompts
@@ -8,17 +32,14 @@ ENV TERM=linux
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies
+# Install only runtime dependencies
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements file
-COPY requirements.txt .
-
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy Python packages from builder
+COPY --from=builder /install /usr/local
 
 # Copy application code
 COPY . .
