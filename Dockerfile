@@ -1,6 +1,10 @@
 # Use Python 3.10 slim image as base
 FROM python:3.10-slim
 
+# Set environment variables to prevent interactive prompts
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TERM=linux
+
 # Set working directory
 WORKDIR /app
 
