@@ -237,7 +237,7 @@ def handle_telegram_update(update:dict) -> None:
             "photo" in message, "video" in message, "document" in message, "new_chat_photo" in message)
 
         if text:
-            translated_text = oai_translate_km_to_en(text)
+            translated_text, stt_conf= oai_translate_km_to_en(text)
             text = translated_text[0]
         
         if not text:
@@ -254,10 +254,10 @@ def handle_telegram_update(update:dict) -> None:
                        with open(src,'wb') as f:
                               for chunk in r.iter_content(8192):
                                f.write(chunk)
-                   stt_text_km, stt_conf = oai_transcribe(src)
-               
-               translate_en_text, trans_src = oai_translate_km_to_en(stt_text_km)
-               text = translate_en_text
+                   stt_text_km = oai_transcribe(src)
+
+               translated_en_text = oai_translate_km_to_en(stt_text_km)
+               text = translated_en_text
         
         # photo/video will be handled with file_id
         media_files: list[tuple[str,str]] = [] #[(kind, file_id)]
