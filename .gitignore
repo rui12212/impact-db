@@ -5,3 +5,6 @@
 
 /creds/
 creds/*
+
+# Log files that may contain sensitive information
+docs/log/
