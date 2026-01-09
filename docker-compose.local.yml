@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: impact-narrative-db-local
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./.env.local:/app/.env
+      - ./credentials:/app/credentials:ro
+      - ./.chroma_categories:/app/.chroma_categories
+      - ./.runtime:/app/.runtime
+      # Code volume mount for hot reload
+      - ./project:/app/project
+    environment:
+      - ENVIRONMENT=local
+      - USE_POLLING=true
+    # Enable auto-reload for development
+    command: uvicorn project.main:app --reload --host 0.0.0.0 --port 8000
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
