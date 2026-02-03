@@ -6,7 +6,7 @@ from typing import Any, Dict
 import requests
 
 from core.audio.helpers_audio import pick_audio_from_message
-from core.audio.stt_translate import decide_transcribe_model, oai_transcribe, oai_translate_km_to_en
+from core.audio.stt_translate import decide_transcribe_model, oai_transcribe, oai_translate_km_to_en, detect_language, transcribe_gemini_en
 from impact_app.categorization.categorizer import categorize
 from impact_app.notion.notion_client import create_or_update_notion_page, ensure_training_space
 from core.telegram_helper import tg_get_file_url, tg_send_message
@@ -55,9 +55,18 @@ def impact_process_update(update:Dict[str, Any]):
                 for chunk in r.iter_content(8192):
                     f.write(chunk)
 
-        #--- Chunking & Preprocess & Transcribe & Translate---
+        #--- Language Detection & Transcribe & Translate---
         # ★Set model name in str : "oai","assemblyai","gladia" ,"elevenlabs","gemini"
-        stt_text_km, translated_en_text = decide_transcribe_model(src, "gemini")
+        detected_lang = detect_language(src, "gemini")
+
+        if detected_lang == "en":
+            # English audio: skip Khmer transcription and translation
+            stt_text_en = transcribe_gemini_en(src)
+            stt_text_km = "The original language may be English"
+            translated_en_text = stt_text_en
+        else:
+            # Khmer audio: existing flow
+            stt_text_km, translated_en_text = decide_transcribe_model(src, "gemini")
     
     base_for_classify = translated_en_text or stt_text_km
 
