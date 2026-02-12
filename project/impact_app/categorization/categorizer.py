@@ -1,10 +1,12 @@
-import os, json
+import os, json, hashlib, logging
 from typing import Dict, Any, List, Tuple
 from pathlib import Path
 
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_chroma import Chroma
 from langchain.schema import Document
+
+log = logging.getLogger('impactdb')
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SEED_FILE = os.getenv("CATEGORY_SEED_FILE", "seed_categories.json")
 # ====Settings====
@@ -28,27 +30,57 @@ CATEGORIES = [
 emb = OpenAIEmbeddings(model=EMBED_MODEL)
 llm = ChatOpenAI(model=LLM_MODEL,temperature=0.8)
 
-def build_or_load_store() -> Chroma:
-    Path(CHROMA_DIR).mkdir(parents=True, exist_ok=True)
-    store = Chroma(collection_name="categories", embedding_function=emb, persist_directory=CHROMA_DIR)
-    # ドキュメント入っていれば再構築不要
-    try:
-        if store._collection.count() >0:
-            return store
-    except Exception:
-        pass
+HASH_FILE = os.path.join(CHROMA_DIR, ".seed_hash") if CHROMA_DIR else ".seed_hash"
 
-# 初回：シード投入
+def _seed_hash() -> str:
+    """seed_categories.json の MD5 ハッシュを返す"""
+    with open(SEED_PATH, "rb") as f:
+        return hashlib.md5(f.read()).hexdigest()
+
+def _load_seeds() -> List[Document]:
+    """シードJSONを読み込み、空文字を除外してDocumentリストを返す"""
     with open(SEED_PATH, "r", encoding="utf-8") as f:
-      seeds = json.load(f)
-
+        seeds = json.load(f)
     docs: List[Document] = []
     for cat, examples in seeds.items():
         for i, text in enumerate(examples):
+            if not text.strip():
+                continue
             docs.append(Document(
                 page_content=text,
-                metadata={"category": cat, "example_id": f"{cat}-{i}"}))    
+                metadata={"category": cat, "example_id": f"{cat}-{i}"}))
+    return docs
+
+def build_or_load_store() -> Chroma:
+    Path(CHROMA_DIR).mkdir(parents=True, exist_ok=True)
+    store = Chroma(collection_name="categories", embedding_function=emb, persist_directory=CHROMA_DIR)
+
+    current_hash = _seed_hash()
+
+    # ハッシュファイルが存在し、一致すれば再構築不要
+    hash_path = Path(HASH_FILE)
+    if hash_path.exists():
+        stored_hash = hash_path.read_text().strip()
+        if stored_hash == current_hash:
+            try:
+                if store._collection.count() > 0:
+                    log.info(f"ChromaDB loaded: {store._collection.count()} docs (seed unchanged)")
+                    return store
+            except Exception:
+                pass
+
+    # シード変更 or 初回: コレクション再構築
+    log.info("Seed changed or first run: rebuilding ChromaDB collection")
+    try:
+        store.delete_collection()
+        store = Chroma(collection_name="categories", embedding_function=emb, persist_directory=CHROMA_DIR)
+    except Exception:
+        pass
+
+    docs = _load_seeds()
     store.add_documents(docs)
+    hash_path.write_text(current_hash)
+    log.info(f"ChromaDB rebuilt: {len(docs)} docs ingested (hash={current_hash[:8]}...)")
     return store
 
 _store = build_or_load_store()
