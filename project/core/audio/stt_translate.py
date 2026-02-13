@@ -8,6 +8,7 @@ import mimetypes
 from elevenlabs.client import ElevenLabs
 from google import genai
 from google.genai import types
+from core.gemini_quota import check_and_increment, GeminiQuotaExceeded
 
 OPEN_API_KEY = os.getenv('OPENAI_API_KEY')
 oai = OpenAI(api_key = OPEN_API_KEY)
@@ -332,10 +333,11 @@ def transcribe_elevenlabs_km(file_path: str) -> str:
 
 
 def transcribe_gemini_km(file_path: str) -> str:
+    check_and_increment()
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY is not set")
-    
+
     client = genai.Client(api_key=GEMINI_API_KEY)
     
     wav = preprocess_for_stt(file_path)
@@ -365,6 +367,7 @@ def transcribe_gemini_km(file_path: str) -> str:
     return full_text
 
 def translate_gemini_km_to_en(km_text: str) -> str:
+    check_and_increment()
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY is not set")
@@ -404,6 +407,7 @@ def detect_language(file_path: str, model_name: str = "gemini") -> str:
     first_chunk_path, _, _ = chunks[0]
 
     if model_name == "gemini":
+        check_and_increment()
         GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
         if not GEMINI_API_KEY:
             raise RuntimeError("GEMINI_API_KEY is not set")
@@ -465,6 +469,7 @@ def transcribe_gemini_en(file_path: str) -> str:
     英語音声の文字起こし（Gemini使用）
     チャンク分割・タイムスタンプ付き
     """
+    check_and_increment()
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY is not set")

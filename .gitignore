@@ -6,5 +6,8 @@
 /creds/
 creds/*
 
+# Gemini API usage tracker
+.gemini_usage.json
+
 # Log files that may contain sensitive information
 docs/log/
