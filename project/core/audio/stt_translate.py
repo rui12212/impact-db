@@ -8,6 +8,7 @@ import mimetypes
 from elevenlabs.client import ElevenLabs
 from google import genai
 from google.genai import types
+from core.gemini_quota import check_and_increment, GeminiQuotaExceeded
 
 OPEN_API_KEY = os.getenv('OPENAI_API_KEY')
 oai = OpenAI(api_key = OPEN_API_KEY)
@@ -332,10 +333,11 @@ def transcribe_elevenlabs_km(file_path: str) -> str:
 
 
 def transcribe_gemini_km(file_path: str) -> str:
+    check_and_increment()
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY is not set")
-    
+
     client = genai.Client(api_key=GEMINI_API_KEY)
     
     wav = preprocess_for_stt(file_path)
@@ -365,6 +367,7 @@ def transcribe_gemini_km(file_path: str) -> str:
     return full_text
 
 def translate_gemini_km_to_en(km_text: str) -> str:
+    check_and_increment()
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY is not set")
@@ -381,6 +384,123 @@ def translate_gemini_km_to_en(km_text: str) -> str:
       return en
     except Exception as e:
         log.warning(f"Gemini Translate failed: {e}")
+
+def detect_language(file_path: str, model_name: str = "gemini") -> str:
+    """
+    音声ファイルの言語を検出する（最初のチャンクで判定）
+
+    Args:
+        file_path: 音声ファイルのパス
+        model_name: 使用するモデル ("gemini", "oai")
+
+    Returns:
+        "km" (Khmer) または "en" (English)
+    """
+    wav = preprocess_for_stt(file_path)
+    chunks = split_wav_to_chunks(wav, chunk_ms=30_000, overlap_ms=1_500)
+
+    if not chunks:
+        log.warning("No chunks available for language detection, defaulting to 'km'")
+        return "km"
+
+    # 最初のチャンクのみ使用
+    first_chunk_path, _, _ = chunks[0]
+
+    if model_name == "gemini":
+        check_and_increment()
+        GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+        if not GEMINI_API_KEY:
+            raise RuntimeError("GEMINI_API_KEY is not set")
+
+        client = genai.Client(api_key=GEMINI_API_KEY)
+
+        with open(first_chunk_path, "rb") as f:
+            audio_data = f.read()
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=[
+                    "Listen to this audio and identify the language. "
+                    "Reply with ONLY 'km' if the language is Khmer/Cambodian, "
+                    "or 'en' if the language is English. "
+                    "Do not include any other text.",
+                    {
+                        "inline_data": {
+                            "data": audio_data,
+                            "mime_type": "audio/wav"
+                        }
+                    }
+                ]
+            )
+
+        detected = getattr(response, "text", "").strip().lower()
+        if detected in ("km", "en"):
+            log.info(f"Language detected: {detected}")
+            return detected
+        else:
+            log.warning(f"Unexpected language detection result: {detected}, defaulting to 'km'")
+            return "km"
+
+    elif model_name == "oai":
+        # OpenAI Whisper の言語検出
+        with open(first_chunk_path, 'rb') as f:
+            tr = oai.audio.transcriptions.create(
+                model="gpt-4o-transcribe",
+                file=f,
+                prompt="Detect the language of this audio."
+            )
+        # Whisperは言語を自動検出するが、明示的な言語コードは返さない
+        # テキスト内容から推測する簡易実装
+        text = getattr(tr, "text", "") or ""
+        # Khmer文字が含まれていればKhmer
+        if any('\u1780' <= c <= '\u17FF' for c in text):
+            log.info("Language detected: km (Khmer script found)")
+            return "km"
+        else:
+            log.info("Language detected: en (no Khmer script found)")
+            return "en"
+
+    else:
+        log.warning(f"Unsupported model for language detection: {model_name}, defaulting to 'km'")
+        return "km"
+
+
+def transcribe_gemini_en(file_path: str) -> str:
+    """
+    英語音声の文字起こし（Gemini使用）
+    チャンク分割・タイムスタンプ付き
+    """
+    check_and_increment()
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+    if not GEMINI_API_KEY:
+        raise RuntimeError("GEMINI_API_KEY is not set")
+
+    client = genai.Client(api_key=GEMINI_API_KEY)
+
+    wav = preprocess_for_stt(file_path)
+    chunks = split_wav_to_chunks(wav, chunk_ms=30_000, overlap_ms=1_500)
+
+    texts: List[str] = []
+    for idx, (cpath, s_ms, e_ms) in enumerate(chunks, start=1):
+        with open(cpath, "rb") as f:
+            audio_data = f.read()
+            tr = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=[
+                    "Please transcribe the content of this audio verbatim in English.",
+                    {
+                        "inline_data": {
+                            "data": audio_data,
+                            "mime_type": "audio/wav"
+                        }
+                    }
+                ]
+            )
+        chunk_text = getattr(tr, "text", "")
+        texts.append(f"[{ms_to_ts(s_ms)}-{ms_to_ts(e_ms)}] {chunk_text}")
+
+    full_text = "\n".join(texts).strip()
+    return full_text
+
 
 def decide_transcribe_model(file_path: str, model_name: str) -> tuple[str, str]:
 

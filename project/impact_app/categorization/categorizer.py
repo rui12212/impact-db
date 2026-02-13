@@ -1,10 +1,12 @@
-import os, json
+import os, json, hashlib, logging
 from typing import Dict, Any, List, Tuple
 from pathlib import Path
 
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_chroma import Chroma
 from langchain.schema import Document
+
+log = logging.getLogger('impactdb')
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SEED_FILE = os.getenv("CATEGORY_SEED_FILE", "seed_categories.json")
 # ====Settings====
@@ -14,7 +16,7 @@ CHROMA_DIR=os.getenv("CHROMA_DIR")
 SEED_PATH = os.path.join(BASE_DIR, SEED_FILE)
 CATEGORY_MODE=os.getenv("CATEGORY_MODE")
 
-# ===Categorize teachers' comment into 6 types===
+# ===Categorize teachers' comment into 7 types===
 CATEGORIES = [
     "0:Teacher/Methods",
     "1:Mass Students",
@@ -25,30 +27,91 @@ CATEGORIES = [
     "fact:Mentioning facts"
 ]
 
+CATEGORY_DEFINITIONS = {
+    "0:Teacher/Methods": {
+        "definition": "Discussions about topics other than classes and students",
+        "example": "When the teacher asked the students to make English sentences, he made sure that it should not make the same one. By doing so, the four students were able to create four different things. I thought it was very effective."
+    },
+    "1:Mass Students": {
+        "definition": "Speaking of numerous students (They, Students, etc.)",
+        "example": "The students in this class enjoyed the discussion. I realized that the students want to learn and become proactive when they link the topic with their own future."
+    },
+    "2a:Individual Character": {
+        "definition": "Describing the student's personality (This student is shy)",
+        "example": "Student A could not concentrate on if the topic went to about difficult math. I wonder how I can attract him."
+    },
+    "2b:Individual Evaluation": {
+        "definition": "Discussing student learning assessments (understood well, did not understand)",
+        "example": "I was very impressed with the student B presentation. It was very good as it was beyond my expectations."
+    },
+    "2c:Individual Verification": {
+        "definition": "Comments verifying student learning (whether learning tasks were appropriate, how group learning and questions influenced their actions)",
+        "example": "Student C started writing something in his notebook but when the teacher asked to take notes he stopped writing it."
+    },
+    "2d:Learning of how Student Learn": {
+        "definition": "State what you have learned from the observed facts.",
+        "example": "Student D writes down the numbers that student E tells him. He wrote down the numbers that he gave him but he didn't know what the numbers meant. He had the numbers in his hand but he didn't know how to graph them. I realized I always checked the worksheets and notebooks to see how far that child has progressed, however this does not mean that he or she understands the subject matter."
+    },
+    "fact:Mentioning facts": {
+        "definition": "Mentioning what you observe, what you see",
+        "example": "I realised the students took note about the triangles and squares. Other students also watched it and tried to copy it on his textbook."
+    },
+}
+
 emb = OpenAIEmbeddings(model=EMBED_MODEL)
-llm = ChatOpenAI(model=LLM_MODEL,temperature=0.8)
+llm = ChatOpenAI(model=LLM_MODEL,temperature=0.2)
+
+HASH_FILE = os.path.join(CHROMA_DIR, ".seed_hash") if CHROMA_DIR else ".seed_hash"
+
+def _seed_hash() -> str:
+    """seed_categories.json の MD5 ハッシュを返す"""
+    with open(SEED_PATH, "rb") as f:
+        return hashlib.md5(f.read()).hexdigest()
+
+def _load_seeds() -> List[Document]:
+    """シードJSONを読み込み、空文字を除外してDocumentリストを返す"""
+    with open(SEED_PATH, "r", encoding="utf-8") as f:
+        seeds = json.load(f)
+    docs: List[Document] = []
+    for cat, examples in seeds.items():
+        for i, text in enumerate(examples):
+            if not text.strip():
+                continue
+            docs.append(Document(
+                page_content=text,
+                metadata={"category": cat, "example_id": f"{cat}-{i}"}))
+    return docs
 
 def build_or_load_store() -> Chroma:
     Path(CHROMA_DIR).mkdir(parents=True, exist_ok=True)
     store = Chroma(collection_name="categories", embedding_function=emb, persist_directory=CHROMA_DIR)
-    # ドキュメント入っていれば再構築不要
+
+    current_hash = _seed_hash()
+
+    # ハッシュファイルが存在し、一致すれば再構築不要
+    hash_path = Path(HASH_FILE)
+    if hash_path.exists():
+        stored_hash = hash_path.read_text().strip()
+        if stored_hash == current_hash:
+            try:
+                if store._collection.count() > 0:
+                    log.info(f"ChromaDB loaded: {store._collection.count()} docs (seed unchanged)")
+                    return store
+            except Exception:
+                pass
+
+    # シード変更 or 初回: コレクション再構築
+    log.info("Seed changed or first run: rebuilding ChromaDB collection")
     try:
-        if store._collection.count() >0:
-            return store
+        store.delete_collection()
+        store = Chroma(collection_name="categories", embedding_function=emb, persist_directory=CHROMA_DIR)
     except Exception:
         pass
 
-# 初回：シード投入
-    with open(SEED_PATH, "r", encoding="utf-8") as f:
-      seeds = json.load(f)
-
-    docs: List[Document] = []
-    for cat, examples in seeds.items():
-        for i, text in enumerate(examples):
-            docs.append(Document(
-                page_content=text,
-                metadata={"category": cat, "example_id": f"{cat}-{i}"}))    
+    docs = _load_seeds()
     store.add_documents(docs)
+    hash_path.write_text(current_hash)
+    log.info(f"ChromaDB rebuilt: {len(docs)} docs ingested (hash={current_hash[:8]}...)")
     return store
 
 _store = build_or_load_store()
@@ -73,9 +136,15 @@ def _embed_vote(text_en:str, k: int= 5) -> Tuple[str, float, List[Dict[str, Any]
 def _llm_refine(text_en:str, evidence: List[Dict[str, Any]]) -> Tuple[str, float, str]:
     # 近傍例を提示してLLMに最終判定させる
     ev = "\n".join([f"[{i+1}] ({e['category']}, score={e['score']:.2f}) {e['example']}" for i ,e in enumerate(evidence)])
-    sys =("You are a strict JSON-only classifier for teacher comments."
-         "Categories: "+", ".join(CATEGORIES) +"."
-         "Return JSON: {\"category\":\"...\",\"confidence\":0~1,\"rationale\":\"...\"}.")
+    cat_defs = "\n".join([
+        f"- {cat}: {d['definition']} (e.g. {d['example'][:120]}...)"
+        for cat, d in CATEGORY_DEFINITIONS.items()
+    ])
+    sys =(
+        "You are a strict JSON-only classifier for teacher comments.\n"
+        "Category definitions:\n" + cat_defs + "\n\n"
+        "Return JSON: {\"category\":\"...\",\"confidence\":0~1,\"rationale\":\"...\"}."
+    )
     usr = f"Nearest examples:\n{ev}\n\nClassify the input into ONE category:\n---\n{text_en}\n---"
     resp = llm.invoke([{"role":"system", "content": sys}, {"role":"user", "content":usr}])
 
@@ -87,8 +156,10 @@ def _llm_refine(text_en:str, evidence: List[Dict[str, Any]]) -> Tuple[str, float
         if cat not in CATEGORIES:
             cat = evidence[0]["category"] if evidence else "None Evidence"
         return cat, conf, rat
-    except Exception:
-        return (evidence[0]["category"] if evidence else "Error None Evidence")
+    except Exception as e:
+        log.warning(f"LLM refine JSON parse failed: {e}")
+        fallback_cat = evidence[0]["category"] if evidence else "0:Teacher/Methods"
+        return fallback_cat, 0.0, "LLM parse error"
 
 def categorize(text_en:str) -> Dict[str,Any]:
     """公開API：テキスト→{category, confidence, evidence, rationale}"""
