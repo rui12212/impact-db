@@ -16,7 +16,7 @@ CHROMA_DIR=os.getenv("CHROMA_DIR")
 SEED_PATH = os.path.join(BASE_DIR, SEED_FILE)
 CATEGORY_MODE=os.getenv("CATEGORY_MODE")
 
-# ===Categorize teachers' comment into 6 types===
+# ===Categorize teachers' comment into 7 types===
 CATEGORIES = [
     "0:Teacher/Methods",
     "1:Mass Students",
@@ -27,8 +27,39 @@ CATEGORIES = [
     "fact:Mentioning facts"
 ]
 
+CATEGORY_DEFINITIONS = {
+    "0:Teacher/Methods": {
+        "definition": "Discussions about topics other than classes and students",
+        "example": "When the teacher asked the students to make English sentences, he made sure that it should not make the same one. By doing so, the four students were able to create four different things. I thought it was very effective."
+    },
+    "1:Mass Students": {
+        "definition": "Speaking of numerous students (They, Students, etc.)",
+        "example": "The students in this class enjoyed the discussion. I realized that the students want to learn and become proactive when they link the topic with their own future."
+    },
+    "2a:Individual Character": {
+        "definition": "Describing the student's personality (This student is shy)",
+        "example": "Student A could not concentrate on if the topic went to about difficult math. I wonder how I can attract him."
+    },
+    "2b:Individual Evaluation": {
+        "definition": "Discussing student learning assessments (understood well, did not understand)",
+        "example": "I was very impressed with the student B presentation. It was very good as it was beyond my expectations."
+    },
+    "2c:Individual Verification": {
+        "definition": "Comments verifying student learning (whether learning tasks were appropriate, how group learning and questions influenced their actions)",
+        "example": "Student C started writing something in his notebook but when the teacher asked to take notes he stopped writing it."
+    },
+    "2d:Learning of how Student Learn": {
+        "definition": "State what you have learned from the observed facts.",
+        "example": "Student D writes down the numbers that student E tells him. He wrote down the numbers that he gave him but he didn't know what the numbers meant. He had the numbers in his hand but he didn't know how to graph them. I realized I always checked the worksheets and notebooks to see how far that child has progressed, however this does not mean that he or she understands the subject matter."
+    },
+    "fact:Mentioning facts": {
+        "definition": "Mentioning what you observe, what you see",
+        "example": "I realised the students took note about the triangles and squares. Other students also watched it and tried to copy it on his textbook."
+    },
+}
+
 emb = OpenAIEmbeddings(model=EMBED_MODEL)
-llm = ChatOpenAI(model=LLM_MODEL,temperature=0.8)
+llm = ChatOpenAI(model=LLM_MODEL,temperature=0.2)
 
 HASH_FILE = os.path.join(CHROMA_DIR, ".seed_hash") if CHROMA_DIR else ".seed_hash"
 
@@ -105,9 +136,15 @@ def _embed_vote(text_en:str, k: int= 5) -> Tuple[str, float, List[Dict[str, Any]
 def _llm_refine(text_en:str, evidence: List[Dict[str, Any]]) -> Tuple[str, float, str]:
     # 近傍例を提示してLLMに最終判定させる
     ev = "\n".join([f"[{i+1}] ({e['category']}, score={e['score']:.2f}) {e['example']}" for i ,e in enumerate(evidence)])
-    sys =("You are a strict JSON-only classifier for teacher comments."
-         "Categories: "+", ".join(CATEGORIES) +"."
-         "Return JSON: {\"category\":\"...\",\"confidence\":0~1,\"rationale\":\"...\"}.")
+    cat_defs = "\n".join([
+        f"- {cat}: {d['definition']} (e.g. {d['example'][:120]}...)"
+        for cat, d in CATEGORY_DEFINITIONS.items()
+    ])
+    sys =(
+        "You are a strict JSON-only classifier for teacher comments.\n"
+        "Category definitions:\n" + cat_defs + "\n\n"
+        "Return JSON: {\"category\":\"...\",\"confidence\":0~1,\"rationale\":\"...\"}."
+    )
     usr = f"Nearest examples:\n{ev}\n\nClassify the input into ONE category:\n---\n{text_en}\n---"
     resp = llm.invoke([{"role":"system", "content": sys}, {"role":"user", "content":usr}])
 
@@ -119,8 +156,10 @@ def _llm_refine(text_en:str, evidence: List[Dict[str, Any]]) -> Tuple[str, float
         if cat not in CATEGORIES:
             cat = evidence[0]["category"] if evidence else "None Evidence"
         return cat, conf, rat
-    except Exception:
-        return (evidence[0]["category"] if evidence else "Error None Evidence")
+    except Exception as e:
+        log.warning(f"LLM refine JSON parse failed: {e}")
+        fallback_cat = evidence[0]["category"] if evidence else "0:Teacher/Methods"
+        return fallback_cat, 0.0, "LLM parse error"
 
 def categorize(text_en:str) -> Dict[str,Any]:
     """公開API：テキスト→{category, confidence, evidence, rationale}"""
