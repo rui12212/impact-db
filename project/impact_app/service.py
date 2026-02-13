@@ -7,6 +7,7 @@ import requests
 
 from core.audio.helpers_audio import pick_audio_from_message
 from core.audio.stt_translate import decide_transcribe_model, oai_transcribe, oai_translate_km_to_en, detect_language, transcribe_gemini_en
+from core.text_cleaner import remove_fillers
 from core.gemini_quota import GeminiQuotaExceeded
 from impact_app.categorization.categorizer import categorize
 from impact_app.notion.notion_client import create_or_update_notion_page, ensure_training_space
@@ -65,7 +66,7 @@ def impact_process_update(update:Dict[str, Any]):
                 # English audio: skip Khmer transcription and translation
                 stt_text_en = transcribe_gemini_en(src)
                 stt_text_km = "The original language may be English"
-                translated_en_text = stt_text_en
+                translated_en_text = remove_fillers(stt_text_en)
             else:
                 # Khmer audio: existing flow
                 stt_text_km, translated_en_text = decide_transcribe_model(src, "gemini")
