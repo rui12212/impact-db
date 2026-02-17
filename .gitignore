@@ -11,3 +11,7 @@ creds/*
 
 # Log files that may contain sensitive information
 docs/log/
+
+# Runtime-generated data (should not be in Git)
+.chroma_categories/
+.runtime/

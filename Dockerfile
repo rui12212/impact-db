@@ -9,7 +9,7 @@ ENV TERM=linux
 RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
-    make \
+    make \    
     python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
@@ -28,9 +28,6 @@ FROM python:3.10-slim
 # Set environment variables to prevent interactive prompts
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TERM=linux
-
-# Set working directory
-WORKDIR /app
 
 # Install only runtime dependencies
 RUN apt-get update && apt-get install -y \
@@ -58,5 +55,5 @@ ENV PYTHONPATH=/app/project
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD curl -f http://localhost:8000/healthz || exit 1
 
-# Run the application
+# Run the application5                    w
 CMD ["uvicorn", "project.main:app", "--host", "0.0.0.0", "--port", "8000"]
