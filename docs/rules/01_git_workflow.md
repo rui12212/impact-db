@@ -9,7 +9,7 @@ main ──────●────────────────●─
             \              /
 develop ─────●──●──●──●──●───────────
               \       /
-feature/xxx ───●──●──●
+feature/xxx ───●──●──●　
 ```
 
 ### Branch Types
@@ -37,9 +37,9 @@ feature/xxx ───●──●──●
 | Type | Description |
 |---|---|
 | `feat` | New feature |
-| `fix` | Bug fix |
-| `docs` | Documentation only |
-| `refactor` | Code refactoring (no functional change) |
+| `fix` | Bug fix |.  
+| `docs` | Documentation only | 
+| `refactor` | Code refactoring (no functional change) | 
 | `test` | Adding or updating tests |
 | `chore` | Build tools, CI/CD, dependencies |
 
