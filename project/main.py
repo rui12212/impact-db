@@ -6,11 +6,13 @@ from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 
 from narrative_app.service import handle_telegram_update
+from experiments.reflection.service import handle_user_message
 from core.config import (
     IMPACT_TELEGRAM_SECRET_TOKEN,
     NARRATIVE_TELEGRAM_SECRET_TOKEN,
     NARRATIVE_TELEGRAM_BOT_TOKEN,
-    IMPACT_TELEGRAM_BOT_TOKEN
+    IMPACT_TELEGRAM_BOT_TOKEN,
+    CHATBOT_TELEGRAM_SECRET_TOKEN,
 )
 from impact_app.service import impact_process_update; load_dotenv()
 import requests
@@ -26,7 +28,7 @@ narrative_secret_token = NARRATIVE_TELEGRAM_SECRET_TOKEN
 app = FastAPI()
 
 # Polling mode flag
-USE_POLLING = os.getenv("USE_POLLING")
+USE_POLLING = os.getenv("USE_POLLING", "false").lower() == "true"
 
 @app.get('/healthz')
 def healthz():
@@ -50,6 +52,15 @@ async def narrative_webhook(request: Request, background: BackgroundTasks):
     update = await request.json()
     background.add_task(handle_telegram_update,update)
     return JSONResponse({"ok": True})
+
+@app.post('/telegram/chatbot/webhook')
+async def chatbot_webhook(request: Request, background: BackgroundTasks):
+    secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
+    if secret != CHATBOT_TELEGRAM_SECRET_TOKEN:
+        raise HTTPException(status_code=401, detail='Invalid secret token for chatbot')
+    update = await request.json()
+    background.add_task(handle_user_message, update)
+    return JSONResponse({'ok': True})
 
 # Polling mode for local development
 if USE_POLLING:

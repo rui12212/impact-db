@@ -5,6 +5,7 @@ from core.config import (
     NOTION_SCHOOLS_DB_ID,
     NOTION_TEACHERS_DB_ID,
     NOTION_NARRATIVES_DB_ID,
+    NOTION_MEMBER_ID,
 )
 from narrative_app.summarization import generate_detailed_content, generate_summary
 from urllib.parse import urlparse
@@ -48,7 +49,54 @@ def get_or_create_school_by_chat(chat_id: int, chat_title:str) -> str:
     )
     return create_resp["id"]
 
-# Teacher related
+# For chatbot
+def get_or_create_member_by_telegram(
+        telegram_user_id: int,
+        name: str,
+        username:Optional[str],
+) -> str:
+    # Get Telegram DB page id from telegram user info
+    # if no exist, create new teacher and return the id
+    notion = get_notion_client()
+
+    # 1 search existing teacher
+    resp = notion.databases.query(
+        **{
+            "database_id": NOTION_MEMBER_ID,
+            "filter":{
+                    "property": "Telegram User ID",
+            "number": {"equals": telegram_user_id},
+            },
+            "page_size": 1,
+        },
+    )
+    results = resp.get("results", [])
+    if results:
+        return results[0]["id"]
+    
+    # 2 create new teacher
+
+    props: Dict[str, Any] = {
+        "Name": {"title": [{"text": {"content": name}}]},
+        "Telegram User ID": {"number": telegram_user_id},
+    }
+
+    # if username exists, add 
+    if username:
+        props["Telegram Username"] = {"rich_text": [{"text": {"content":username}}]}
+    
+    create_resp = notion.pages.create(
+        **{
+            "parent": {"database_id": NOTION_MEMBER_ID},
+            "properties": props,
+        }
+    )
+    return create_resp["id"]
+
+
+
+
+# Teacher related/for narrative/impact/db
 def get_or_create_teacher_by_telegram(
         telegram_user_id: int,
         name: str,
