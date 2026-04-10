@@ -4,8 +4,9 @@ from typing import Any, Dict
 from fastapi import FastAPI, Request, BackgroundTasks, HTTPException
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
-
 from narrative_app.service import handle_telegram_update
+from experiments.reflection.service import handle_user_message
+from v1_portfolio.service import handle_portfolio_update
 from core.config import (
     IMPACT_TELEGRAM_SECRET_TOKEN,
     NARRATIVE_TELEGRAM_SECRET_TOKEN,
@@ -50,6 +51,15 @@ async def narrative_webhook(request: Request, background: BackgroundTasks):
     update = await request.json()
     background.add_task(handle_telegram_update,update)
     return JSONResponse({"ok": True})
+
+@app.post('/telegram/portfolio/webhook')
+async def portfolio_webhook(request: Request, background: BackgroundTasks):
+    secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
+    if secret != PORTFOLIO_TELEGRAM_SECRET_TOKEN:
+        raise HTTPException(status_code=401, detail='Invalid secret token for portfolio')
+    update = await request.json()
+    background.add_task(handle_portfolio_update, update)
+    return JSONResponse({'ok': True})
 
 # Polling mode for local development
 if USE_POLLING:

@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    container_name: portfolio-bot
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./.env:/app/.env
+      - ./credentials:/app/credentials:ro
+      - ./.chroma_categories:/app/.chroma_categories
+      - ./.runtime:/app/.runtime
+      # Code volume mount for hot reload
+      - ./project:/app/project
+    environment:
+      - USE_POLLING=false
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app/project
+    # Enable auto-reload for development
+    command: uvicorn main:app --reload --reload-dir /app/project --host 0.0.0.0 --port 8000
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
