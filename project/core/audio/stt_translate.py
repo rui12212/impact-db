@@ -16,7 +16,7 @@ logging.basicConfig(level=logging.INFO)
 log = logging.getLogger('impactdb'
 )
 
-def oai_transcribe(file_path: str) -> str:
+def oai_transcribe(file_path: str, description: Optional[str]=None) -> str:
     # 1 前処理（VADはまず無効で全文残す）
     # 2 30s + 1.5s overlapでチャンク化
     # 3 チャンクごとにWhisperへ
@@ -25,7 +25,7 @@ def oai_transcribe(file_path: str) -> str:
     # 1前処理
     wav = preprocess_for_stt(file_path)
     # 2チャンク化
-    chunks = split_wav_to_chunks(wav, chunk_ms=30_000, overlap_ms=1_500)
+    chunks = split_wav_to_chunks(wav, chunk_ms=30_000, overlap_ms=0)
     # 3 チャンクごとにWhisperへ
     texts = []
     for idx, (cpath, s_ms, e_ms) in  enumerate(chunks, start=1):
@@ -33,29 +33,45 @@ def oai_transcribe(file_path: str) -> str:
           tr = oai.audio.transcriptions.create(
               model="gpt-4o-transcribe",
               file=f,
-              prompt="The audio is in Khmer(km). Write Khmer scripts accurately."
+              prompt=description,
           )
         chunk_text = getattr(tr, "text", "") or ""
-        # 区切りをつけて連結
-        texts.append(f"[{ms_to_ts(s_ms)}-{ms_to_ts(e_ms)}] {chunk_text}")
+        # 区切りをつけて連結する場合
+        # texts.append(f"[{ms_to_ts(s_ms)}-{ms_to_ts(e_ms)}] {chunk_text}")
+        # 区切りなしで連結
+        texts.append(f"{chunk_text}")
     
     full_text = "\n".join(texts).strip()
     return full_text #0.9
 
 
 def oai_translate_km_to_en(text:str) -> str:
-    # 1st: Google Trasnlate
     try:
         msgs = [
             {'role': 'system', 'content': 'you translate khmer to clear Eng'},
             {'role': 'user', 'content': text}
         ]
 
-        r= oai.chat.completions.create(model='gpt-4o-mini',messages=msgs)
+        r= oai.chat.completions.create(model='gpt-5-mini',messages=msgs)
         en = r.choices[0].message.content.strip()
         return en
     except Exception as e:
         log.warning(f"OpenAI Translate failed: {e}")
+
+
+def portfolio_translate_note_km_to_en(text:str,model:str) -> str:
+    try:
+        msgs = [
+            {'role': 'system', 'content': 'You are an excellent translator. Please return the text according to the following conditions:① Do not change anything written in English.② Translate only the parts written in Khmer into English.③ Even if parts of the text do not make sense when read as a whole, do not alter the meaning of the sentences. Do not summarize what is written.④ Return the text in the exact order of the original.'},
+            {'role': 'user', 'content': text}
+        ]
+
+        r= oai.chat.completions.create(model=model,messages=msgs)
+        en = r.choices[0].message.content.strip()
+        return en
+    except Exception as e:
+        log.warning(f"OpenAI Translate failed: {e}")
+
 
 
 # common helper (HTTP Polling)
