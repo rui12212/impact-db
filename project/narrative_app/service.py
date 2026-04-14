@@ -19,7 +19,7 @@ from narrative_app.notion_repos.notion_repos import (
     update_narrative_tags,
 )
 
-from narrative_app.grouping import is_within_window, parse_iso, to_iso
+from core.grouping import is_within_window, parse_iso, to_iso
 from core.notion_client import get_notion_client
 from narrative_app.classification import classify_subject
 from core.telegram_helper import tg_get_file_url

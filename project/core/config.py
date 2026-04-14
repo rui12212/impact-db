@@ -54,6 +54,7 @@ CATEGORY_SEED_PATH = os.getenv("CATEGORY_SEED_PATH")
 
 # The duration of the time-window: Test=15min / Development=18hours
 NARRATIVE_WINDOW_MINUTES = int(os.getenv("NARRATIVE_WINDOW_MINUTES", "15"))
+PORTFOLIO_WINDOW_MINUTES = int(os.getenv("PORTFOLIO_WINDOW_MINUTES", "60"))
 
 # if not all([IMPACT_TELEGRAM_BOT_TOKEN, IMPACT_TELEGRAM_SECRET_TOKEN]):
 #     raise RuntimeError('Missing required env vars. Check .env')

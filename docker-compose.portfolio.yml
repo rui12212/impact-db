@@ -18,7 +18,7 @@ services:
       # Code volume mount for hot reload
       - ./project:/app/project
     environment:
-      - USE_POLLING=false
+      - USE_POLLING=False
       - PYTHONUNBUFFERED=1
       - PYTHONPATH=/app/project
     # Enable auto-reload for development
