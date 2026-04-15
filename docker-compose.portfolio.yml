@@ -15,14 +15,11 @@ services:
       - ./credentials:/app/credentials:ro
       - ./.chroma_categories:/app/.chroma_categories
       - ./.runtime:/app/.runtime
-      # Code volume mount for hot reload
-      - ./project:/app/project
     environment:
       - USE_POLLING=False
       - PYTHONUNBUFFERED=1
       - PYTHONPATH=/app/project
-    # Enable auto-reload for development
-    command: uvicorn main:app --reload --reload-dir /app/project --host 0.0.0.0 --port 8000
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
     restart: unless-stopped
     logging:
       driver: "json-file"
