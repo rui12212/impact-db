@@ -32,6 +32,7 @@ from v1_portfolio.notion.notion_repos import (
     append_media_to_portfolio,
     translate_note_and_update_translated_note,
 )
+from core.r2_client import upload_from_url, upload_from_path
 
 logger = logging.getLogger(__name__)
 
@@ -94,18 +95,21 @@ def _append_media_files(portfolio_page_id: str, media_files: list[tuple[str, str
     resolved: list[tuple[str, str]] = []
     for kind, file_id in media_files:
         try:
-            url = tg_get_file_url(file_id, portfolio_bot_token)
+            tg_url = tg_get_file_url(file_id,portfolio_bot_token)
+            if kind == "photo":
+                r2_url = upload_from_url(tg_url, f"photo_{file_id}.jpg", "image/jpeg")
+            else:
+                r2_url = upload_from_url(tg_url, f"video_{file_id}.mp4", "video/mp4")
             name = "Photo" if kind == "photo" else "Video"
             append_media_to_portfolio(
                 portfolio_page_id=portfolio_page_id,
-                media_url=url,
+                media_url=r2_url,
                 name=name,
             )
-            resolved.append((kind, url))
-            logger.info("Appended media to portfolio=%s kind=%s", portfolio_page_id, kind)
+            resolved.append((kind, r2_url))
+            logger.info("Append media to portfolio=%s kind=%s", portfolio_page_id, kind)
         except Exception:
             logger.exception("Failed to append media kind=%s file_id=%s to portfolio %s", kind, file_id, portfolio_page_id)
-
     if resolved:
         try:
             append_media_blocks_to_children(
@@ -206,15 +210,18 @@ async def handle_telegram_data(update: dict) -> None:
                 file_id=voice["file_id"]
                 logger.info("Received voice message, file_id=%s", file_id)
 
-                file_url=tg_get_file_url(file_id, PORTFOLIO_TELEGRAM_BOT_TOKEN)
+                tg_url=tg_get_file_url(file_id, PORTFOLIO_TELEGRAM_BOT_TOKEN)
                 with tempfile.TemporaryDirectory() as td:
-                    src=os.path.join(td, (voice.get("file_name") or "in.bin"))
-                    with requests.get(file_url, stream=True, timeout=180) as r:
+                    original_name=voice.get("file_name") or "in.bin"
+                    src=os.path.join(td, original_name)
+                    with requests.get(tg_url, stream=True, timeout=180) as r:
                         r.raise_for_status()
                         with open(src,'wb') as f:
                             for chunk in r.iter_content(8192):
                                 f.write(chunk)
                     note_text = oai_transcribe(src, description)
+                    ext = os.path.splitext(original_name)[1] or ".ogg"
+                    file_url = upload_from_path(src, f"audio_f{file_id}{ext}", "audio/ogg")
 
 
         # photo/video
@@ -241,15 +248,17 @@ async def handle_telegram_data(update: dict) -> None:
             elif mime.startswith("video/"):
                 media_files.append(("video", doc["file_id"]))
             elif mime.startswith("audio/") or file_name.endswith((".mp3", ".m4a", ".wav", ".ogg", ".flac", ".aac", ".opus")):
-                file_url= tg_get_file_url(doc["file_id"], PORTFOLIO_TELEGRAM_BOT_TOKEN)
+                tg_url= tg_get_file_url(doc["file_id"], PORTFOLIO_TELEGRAM_BOT_TOKEN)
+                doc_file_name = doc.get("file_name") or "document.bin"
                 with tempfile.TemporaryDirectory() as td:
-                    src = os.path.join(td, doc.get("file_name") or "document.bin")
-                    with requests.get(file_url, stream=True, timeout=180) as r:
+                    src = os.path.join(td, doc_file_name)
+                    with requests.get(tg_url, stream=True, timeout=180) as r:
                         r.raise_for_status()
                         with open(src, "wb") as f:
                             for chunk in r.iter_content(8192):
                                 f.write(chunk)
                     note_text = oai_transcribe(src)
+                    file_url = upload_from_path(src, f"audio_{doc[file_id]}_{doc_file_name}", mime or "audio/mpeg")
             else:
                 # if mime_type is empty or unclear, making sure with the extension
                 if file_name.endswith((".jpg", ".jpeg", ".png", ".JPEG", ".JPG", ".PNG", ".webp", ".heic", ".HEIC")):
