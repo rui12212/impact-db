@@ -15,3 +15,8 @@ docs/log/
 # Runtime-generated data (should not be in Git)
 .chroma_categories/
 .runtime/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
