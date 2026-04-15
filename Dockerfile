@@ -35,6 +35,9 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
+# Set working directory
+WORKDIR /app
+
 # Copy Python packages from builder
 COPY --from=builder /install /usr/local
 
