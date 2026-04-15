@@ -1,5 +1,4 @@
 from datetime import datetime, timedelta, timezone
-from core.config import NARRATIVE_WINDOW_MINUTES
 
 def parse_iso(ts: str) -> datetime:
     # Helper to parse ISO8601(str) to datetime(UTC)
@@ -16,9 +15,10 @@ def to_iso(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 def is_within_window(
+        bot_window_minutes: int,
         first_timestamp: datetime,
         new_timestamp: datetime,
 ) -> bool:
 # Check if new_timestamp is qithin NARRATIVE_WINDOW_MINUTES compared to the first_timestamp
-    window = timedelta(minutes=NARRATIVE_WINDOW_MINUTES)
+    window = timedelta(minutes=bot_window_minutes)
     return (new_timestamp - first_timestamp) <= window

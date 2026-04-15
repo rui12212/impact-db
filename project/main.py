@@ -4,7 +4,6 @@ from typing import Any, Dict
 from fastapi import FastAPI, Request, BackgroundTasks, HTTPException
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
-
 from narrative_app.service import handle_telegram_update
 from experiments.reflection.service import handle_user_message
 from core.config import (
@@ -17,6 +16,8 @@ from core.config import (
 from impact_app.service import impact_process_update; load_dotenv()
 import requests
 import ulid
+from v1_portfolio.service import handle_callback_query, handle_telegram_data,handle_command
+from core.config import PORTFOLIO_TELEGRAM_SECRET_TOKEN
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger('impactdb')
@@ -28,7 +29,7 @@ narrative_secret_token = NARRATIVE_TELEGRAM_SECRET_TOKEN
 app = FastAPI()
 
 # Polling mode flag
-USE_POLLING = os.getenv("USE_POLLING", "false").lower() == "true"
+USE_POLLING = os.getenv("USE_POLLING", "").lower() == "true"
 
 @app.get('/healthz')
 def healthz():
@@ -62,7 +63,22 @@ async def chatbot_webhook(request: Request, background: BackgroundTasks):
     background.add_task(handle_user_message, update)
     return JSONResponse({'ok': True})
 
-# Polling mode for local development
+@app.post('/telegram/portfolio/webhook')
+async def portfolio_webhook(request: Request, background: BackgroundTasks):
+    secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
+    if secret != PORTFOLIO_TELEGRAM_SECRET_TOKEN:
+        raise HTTPException(status_code=401, detail='Invalid secret token for portfolio')
+    update = await request.json()
+
+    if "callback_query" in update:
+        background.add_task(handle_callback_query, update)
+    elif (update.get("message",{}).get("entities") or [{}])[0].get("type") == "bot_command":
+        background.add_task(handle_command, update)
+    else:
+        background.add_task(handle_telegram_data, update)
+
+    return JSONResponse({"ok": True})
+
 if USE_POLLING:
     # Store bot applications globally for shutdown
     narrative_app_global = None

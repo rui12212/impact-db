@@ -1,4 +1,8 @@
 # .gitignore
+
+# macOS system files
+.DS_Store
+**/.DS_Store
 .env
 .env.*
 *.env
@@ -15,6 +19,11 @@ docs/log/
 # Runtime-generated data (should not be in Git)
 .chroma_categories/
 .runtime/
+
+# Claude Code workspace
+.claude/
+
+memory/
 
 # Python cache
 __pycache__/
