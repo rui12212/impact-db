@@ -9,7 +9,9 @@ from core.config import (
 portfolio_bot_token = PORTFOLIO_TELEGRAM_BOT_TOKEN
 portfolio_bot_window_minutes = PORTFOLIO_WINDOW_MINUTES
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from core.grouping import is_within_window, parse_iso, to_iso
+from core.config import PORTFOLIO_TIMEZONE
 from typing import Optional, Dict, Any, List
 from core.audio.stt_translate import portfolio_translate_note_km_to_en
 
@@ -238,10 +240,10 @@ def decide_and_get_or_create_portfolio(
     #  1: No Open portfolio-> create new Portfolio record
     if open_portfolio is None:
         start_iso = to_iso(message_dt)
-        summary = "New Record"
+        local_dt = message_dt.astimezone(ZoneInfo(PORTFOLIO_TIMEZONE))
         portfolio_page_id = create_portfolio(
             user_id=user_id,
-            summary=summary,
+            summary="Note-" + local_dt.strftime("%d/%m/%Y,%H:%M"),
             start_timestamp_iso=start_iso,
             text=text,
             sound_file=sound_file,
@@ -345,38 +347,73 @@ def check_and_close_portfolio(user_id: str, limit: int = 5) -> List[str]:
 # UserIDをもとに、新規のPortfolioを作成
 # →Text \Video \Photo／Soundfileの処理がはいる
 
+def _find_heading_block_id(notion, page_id:str, heading_text: str) -> str | None:
+    # find heading_3 block_id from existing children. If none, return None
+    result = notion.blocks.children.list(block_id=page_id)
+    for block in result.get("results", []):
+        if block.get("type") != "heading_3":
+            continue
+        rich_text = block["heading_3"].get("rich_text",[])
+        if rich_text and rich_text[0]["text"]["content"] == heading_text:
+            return block["id"]
+    return None
+
+
+def _make_blocks(items: list[tuple[str, str]]) -> list[dict]:
+    blocks = []
+    for kind, url in items:
+      block_type = "image" if kind == "photo" else "video"
+      blocks.append({
+        "object": "block",
+        "type": block_type,
+        block_type: {"type": "external", "external": {"url": url}},
+      })
+    return blocks
+
+
 def append_media_blocks_to_children(
     portfolio_page_id: str,
     media_items: list[tuple[str, str]],  # (kind, url)
 ) -> None:
     """Add a 'Media' heading_3 + image/video blocks to page children."""
     notion = get_notion_client()
-    blocks: list[Dict[str, Any]] = [
-        {
-            "object": "block",
-            "type": "heading_3",
-            "heading_3": {
-                "rich_text": [{"type": "text", "text": {"content": "Media"}}]
-            },
-        }
-    ]
-    for kind, url in media_items:
-        block_type = "image" if kind == "photo" else "video"
-        blocks.append({
-            "object": "block",
-            "type": block_type,
-            block_type: {
-                "type": "external",
-                "external": {"url": url},
-            },
-        })
-    notion.blocks.children.append(
-        **{
-            "block_id": portfolio_page_id,
-            "children": blocks,
-        }
-    )
 
+    # list[tuple[str, str]
+    photos = [(k,u) for k,u in media_items if k == "photo"]
+    videos = [(k,u) for k,u in media_items if k == "video"]
+    print(photos)
+    print(videos)
+
+    for label, items in [("Photo", photos), ("Video", videos)]:
+        if not items:
+            continue
+
+        existing_id = _find_heading_block_id(notion, portfolio_page_id, label)
+
+        if existing_id:
+            notion.blocks.children.append(
+                block_id=existing_id,
+                children=_make_blocks(items),
+            )
+        else:
+            # step1: create toggle heading
+            response = notion.blocks.children.append(
+                block_id=portfolio_page_id,
+                children=[{
+                    "object": "block",
+                    "type": "heading_3",
+                    "heading_3": {
+                        "rich_text": [{"type": "text", "text": {"content": label}}],
+                        "is_toggleable": True,
+                    },
+                }],
+            )
+            # step2: append media blocks to the new toggle heading
+            new_heading_id = response["results"][0]["id"]
+            notion.blocks.children.append(
+                block_id=new_heading_id,
+                children=_make_blocks(items),
+            )
 
 def append_media_to_portfolio(
     portfolio_page_id: str,

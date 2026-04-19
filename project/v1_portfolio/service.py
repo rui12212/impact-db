@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import tempfile
+import threading
 
 import requests
 from datetime import datetime, timezone
@@ -17,7 +18,8 @@ from telegram.ext import (
 )
 from core.audio.helpers_audio import pick_audio_from_message
 from core.audio.stt_translate import oai_transcribe, oai_translate_km_to_en
-from core.config import PORTFOLIO_TELEGRAM_BOT_TOKEN
+from zoneinfo import ZoneInfo
+from core.config import PORTFOLIO_TELEGRAM_BOT_TOKEN, PORTFOLIO_TIMEZONE
 from core.locks import get_teacher_lock
 from core.telegram_helper import tg_get_file_url, tg_send_message
 from v1_portfolio.models import TelegramUserInfo, PortfolioDecisionResult
@@ -156,9 +158,10 @@ def handle_callback_query(update:dict) -> None:
         closed_page_list = check_and_close_portfolio(pending["notion_user_id"])
         for page in closed_page_list:
             translate_note_and_update_translated_note(page)
+        
         portfolio_page_id = create_portfolio(
             user_id=pending["notion_user_id"],
-            summary="New Recording",
+            summary=pending["date"],
             start_timestamp_iso=to_iso(datetime.now(timezone.utc)),
             text=pending["text"],
             sound_file=pending["sound_file"],
@@ -291,6 +294,13 @@ async def handle_telegram_data(update: dict) -> None:
                 text=note_text,
                 sound_file=file_url
             )
+
+        # tg_send_message(
+        #     chat_id=chat["id"],
+        #     token=portfolio_bot_token,
+        #     text="Recodding Suucess✏️"
+        # )
+        
         logger.info(
             "Saved narrative: page_id=%s is_new=%s, started_at=%s, needs_confirmation=%s",
             result.portfolio_page_id,
@@ -304,6 +314,16 @@ async def handle_telegram_data(update: dict) -> None:
         # InlineKeyboardでのYES＿NOの確認が必要な場合＝OPENで1時間以上経っている時
         # メディアはユーザーの選択後に追加するため、ここでは追加しない
         if result.needs_confirmation:
+            existing = pending_store.get(from_user["id"])
+
+            if existing:
+                existing["media_files"].extend(media_files)
+                if note_text:
+                    existing["text"] = (existing["text"] + "\n" + note_text).strip()
+                if file_url and not existing["sound_file"]:
+                    existing["sound_file"] = file_url
+                return
+
             pending_store[from_user["id"]] = {
                 "portfolio_page_id": portfolio_page_id,
                 "text": note_text,
@@ -311,6 +331,7 @@ async def handle_telegram_data(update: dict) -> None:
                 "sound_file": file_url,
                 "started_at": result.started_at,
                 "notion_user_id": user_id,
+                "date": "Note-" + message_dt.astimezone(ZoneInfo(PORTFOLIO_TIMEZONE)).strftime("%d/%m/%Y,%H:%M"),
             }
             bot = Bot(token=BOT_TOKEN)
             keyboard =[
