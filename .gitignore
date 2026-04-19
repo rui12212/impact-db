@@ -29,3 +29,4 @@ memory/
 __pycache__/
 *.pyc
 *.pyo
+.chroma_categories/
