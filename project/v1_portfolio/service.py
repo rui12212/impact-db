@@ -19,7 +19,7 @@ from telegram.ext import (
 from core.audio.helpers_audio import pick_audio_from_message
 from core.audio.stt_translate import oai_transcribe, oai_translate_km_to_en
 from zoneinfo import ZoneInfo
-from core.config import PORTFOLIO_TELEGRAM_BOT_TOKEN, PORTFOLIO_TIMEZONE
+from core.config import (PORTFOLIO_TELEGRAM_BOT_TOKEN, PORTFOLIO_TIMEZONE)
 from core.locks import get_teacher_lock
 from core.telegram_helper import tg_get_file_url, tg_send_message
 from v1_portfolio.models import TelegramUserInfo, PortfolioDecisionResult
@@ -40,9 +40,6 @@ logger = logging.getLogger(__name__)
 
 portfolio_bot_token = PORTFOLIO_TELEGRAM_BOT_TOKEN
 # ０：new/help以外のコマンドラインは常にhelpが発生するようにする
-
-
-BOT_TOKEN = PORTFOLIO_TELEGRAM_BOT_TOKEN
 
 # -----Command Line-----
 HELP_TEXT = """\
@@ -76,7 +73,7 @@ async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def handle_command(update_data: dict) -> None:
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app = ApplicationBuilder().token(portfolio_bot_token).build()
 
     app.add_handler(CommandHandler("help", help_command))
     # Telegramはコマンドを小文字に正規化するため /New /NEW なども /new として受け付けられる
@@ -213,7 +210,7 @@ async def handle_telegram_data(update: dict) -> None:
                 file_id=voice["file_id"]
                 logger.info("Received voice message, file_id=%s", file_id)
 
-                tg_url=tg_get_file_url(file_id, PORTFOLIO_TELEGRAM_BOT_TOKEN)
+                tg_url=tg_get_file_url(file_id, portfolio_bot_token)
                 with tempfile.TemporaryDirectory() as td:
                     original_name=voice.get("file_name") or "in.bin"
                     src=os.path.join(td, original_name)
@@ -251,7 +248,7 @@ async def handle_telegram_data(update: dict) -> None:
             elif mime.startswith("video/"):
                 media_files.append(("video", doc["file_id"]))
             elif mime.startswith("audio/") or file_name.endswith((".mp3", ".m4a", ".wav", ".ogg", ".flac", ".aac", ".opus")):
-                tg_url= tg_get_file_url(doc["file_id"], PORTFOLIO_TELEGRAM_BOT_TOKEN)
+                tg_url= tg_get_file_url(doc["file_id"], portfolio_bot_token)
                 doc_file_name = doc.get("file_name") or "document.bin"
                 with tempfile.TemporaryDirectory() as td:
                     src = os.path.join(td, doc_file_name)
@@ -333,7 +330,7 @@ async def handle_telegram_data(update: dict) -> None:
                 "notion_user_id": user_id,
                 "date": "Note-" + message_dt.astimezone(ZoneInfo(PORTFOLIO_TIMEZONE)).strftime("%d/%m/%Y,%H:%M"),
             }
-            bot = Bot(token=BOT_TOKEN)
+            bot = Bot(token=portfolio_bot_token)
             keyboard =[
                 [
                     InlineKeyboardButton("CONTINUE🏃‍♀️‍➡️", callback_data="continue"),
@@ -345,7 +342,7 @@ async def handle_telegram_data(update: dict) -> None:
 
             # tg_send_message(
             #     chat_id=chat["id"],
-            #     token=PORTFOLIO_TELEGRAM_BOT_TOKEN,
+            #     token=portfolio_bot_token,
             #     text="Do you want to start new recording/ or continue adding data?",
             #     reply_markup=keyboard.to_dict(),
             # )
