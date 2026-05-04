@@ -19,7 +19,7 @@ from telegram.ext import (
 from core.audio.helpers_audio import pick_audio_from_message
 from core.audio.stt_translate import oai_transcribe, oai_translate_km_to_en
 from zoneinfo import ZoneInfo
-from core.config import (PORTFOLIO_TELEGRAM_BOT_TOKEN, PORTFOLIO_TIMEZONE)
+from core.config import (PORTFOLIO_TELEGRAM_BOT_TOKEN, PORTFOLIO_TIMEZONE, TEST_PORTFOLIO_TELEGRAM_BOT_TOKEN)
 from core.locks import get_teacher_lock
 from core.telegram_helper import tg_get_file_url, tg_send_message
 from v1_portfolio.models import TelegramUserInfo, PortfolioDecisionResult
@@ -35,6 +35,8 @@ from v1_portfolio.notion.notion_repos import (
     translate_note_and_update_translated_note,
 )
 from core.r2_client import upload_from_url, upload_from_path
+
+import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -89,8 +91,156 @@ async def handle_command(update_data: dict) -> None:
 # -----When the the callback_query were sent by user through InlineButton-----
 pending_store: dict[int, dict] = {}
 
+# making time buffer depends on each media_group_id
+# this is to add captions at the bottomn of the each Photos/Videos files on children, when user send several photos and videos at the same time
+media_group_buffer: dict[str, dict] = {}
+media_group_lock =asyncio.Lock()
+MEDIA_GROUP_DEBOUCE_SEC = 3.0
 
-def _append_media_files(portfolio_page_id: str, media_files: list[tuple[str, str]]) -> None:
+
+async def _buffer_media_group(message:dict) -> None:
+    # """media_group_id 付き update を一時バッファに溜め、debounce後に一括処理する"""
+    media_group_id = message["media_group_id"]
+    # extract media files from update
+    media_files: list[tuple[str, str]] = []
+
+    photos = message.get("photo") or []
+    if photos and "file_id" in photos[-1]:
+        media_files.append(("photo", photos[-1]["file_id"]))
+
+    video = message.get("video")
+    if video and "file_id" in video:
+        media_files.append(("video", video["file_id"]))
+    doc = message.get("document")
+    if doc and "file_id" in doc:
+        mime = (doc.get("mime_type") or "").lower()
+        if mime.startswith("image/"):
+            media_files.append(("photo", doc["file_id"]))
+        elif mime.startswith("video/"):
+            media_files.append(("video", doc["file_id"]))
+    
+    caption = message.get("caption")
+
+    async with media_group_lock:
+        buf = media_group_buffer.get(media_group_id)
+        if buf is None:
+            buf = {
+                "first_message": message,
+                "media_files": [],
+                "caption": None,
+                "task": None,
+            }
+            media_group_buffer[media_group_id] = buf
+        
+        buf["media_files"].extend(media_files)
+        if caption and not buf["caption"]:
+            buf["caption"] = caption
+        
+        # cancel the existing task and make new task
+        if buf["task"] and not buf["task"].done():
+          buf["task"].cancel()
+
+        buf["task"] = asyncio.create_task(_flush_media_group(media_group_id))
+
+async def _flush_media_group(media_group_id: str) -> None:
+    try:
+        await asyncio.sleep(MEDIA_GROUP_DEBOUCE_SEC)
+    except asyncio.CancelledError:
+        return
+    
+    async with media_group_lock:
+        buf = media_group_buffer.pop(media_group_id, None)
+    
+    if not buf or not buf["media_files"]:
+        return
+    
+    try:
+        await _process_album(
+            first_message=buf["first_message"],
+            media_files=buf["media_files"],
+            caption=buf["caption"],
+        )
+    except Exception:
+        logger.exception("Failed to flush media group %s", media_group_id)
+
+async def _process_album(
+    first_message: dict,
+    media_files: list[tuple[str, str]],
+    caption: Optional[str],
+) -> None:
+    # apply the data handling of handle_telegram_update to the album(dealing with bulk of media/caption)
+    from_user = first_message["from"]
+    chat = first_message["chat"]
+    date_ts = first_message.get("date")
+    message_dt = (
+        datetime.fromtimestamp(date_ts, tz=timezone.utc)
+        if date_ts is not None
+        else datetime.now(timezone.utc)
+    )
+
+    user_info = TelegramUserInfo(
+        user_id=from_user["id"],
+        first_name=from_user.get("first_name",""),
+        last_name=from_user.get("last_name", "no lastname set"),
+        username=from_user.get("username", "no username set"),
+    )
+
+    user_id = get_or_create_user(user_info)
+    user_lock = get_teacher_lock(user_id)
+
+    with user_lock:
+        result = decide_and_get_or_create_portfolio(
+            user_id=user_id,
+            message_dt=message_dt,
+            text="",
+            sound_file=""
+        )
+    
+    portfolio_page_id = result.portfolio_page_id
+
+    if result.needs_confirmation:
+        existing = pending_store.get(from_user["id"])
+        if existing:
+            existing["media_files"].extend(media_files)
+            if caption and not existing.get("caption"):
+                existing["caption"] = caption
+            return
+        
+        pending_store[from_user["id"]] = {
+            "portfolio_page_id": portfolio_page_id,
+            "text": "",
+            "media_files": media_files,
+            "caption": caption,
+            "sound_file": "",
+            "started_at": result.started_at,
+            "notion_user_id": user_id,
+            "date": "Note-" + message_dt.astimezone(ZoneInfo(PORTFOLIO_TIMEZONE)).strftime("%d/%m/%Y,%H:%M"),
+        }
+        bot = Bot(token=portfolio_bot_token)
+        keyboard = [[
+            InlineKeyboardButton("CONTINUE🏃‍♀️‍➡️", callback_data="continue"),
+            InlineKeyboardButton("START NEW✏️", callback_data="finish"),
+        ]]
+
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await bot.send_message(
+            chat_id=chat["id"],
+            text="You left recording for long time...!\nDo you want to CONTINUE previous session?\nor START NEW records?",
+            reply_markup=reply_markup,
+        )
+        return
+    
+    _append_media_files(portfolio_page_id, media_files, caption=caption)
+
+    tg_send_message(
+        chat_id=chat["id"],
+        token=portfolio_bot_token,
+        text="Data recorded ✏️",
+    )
+
+
+
+def _append_media_files(portfolio_page_id: str, media_files: list[tuple[str, str]], caption: Optional[str] = None,) -> None:
     resolved: list[tuple[str, str]] = []
     for kind, file_id in media_files:
         try:
@@ -114,17 +264,46 @@ def _append_media_files(portfolio_page_id: str, media_files: list[tuple[str, str
             append_media_blocks_to_children(
                 portfolio_page_id=portfolio_page_id,
                 media_items=resolved,
+                caption=caption,
             )
         except Exception:
             logger.exception("Failed to append media blocks to children for portfolio %s", portfolio_page_id)
 
 
-def handle_callback_query(update:dict) -> None:
+async def handle_callback_query(update: dict) -> None:
     callback = update.get("callback_query", {})
+    callback_id = callback.get("id")
     callback_data = callback.get("data")
     from_user = callback.get("from", {})
     telegram_user_id = from_user["id"]
-    chat_id = callback.get("message", {}).get("chat", {}).get("id")
+    message = callback.get("message", {}) or {}
+    chat_id = message.get("chat", {}).get("id")
+    message_id = message.get("message_id")
+
+    bot = Bot(token=portfolio_bot_token)
+
+    # 1) ボタンのスピナーを即時解除（再タップ抑止のため最優先）
+    if callback_id:
+        try:
+            await bot.answer_callback_query(
+                callback_query_id=callback_id,
+                text="Recording Data Now...",
+                show_alert=True,
+            )
+        except Exception:
+            logger.exception("Failed to answer callback query id=%s", callback_id)
+
+    # 2) インラインキーボードを除去して以後のタップを防ぐ
+    if chat_id and message_id:
+        try:
+            await bot.edit_message_reply_markup(
+                chat_id=chat_id,
+                message_id=message_id,
+                reply_markup=None,
+            )
+        except Exception:
+            # 二重実行で既に消えているケースなどは無視
+            logger.exception("Failed to remove inline keyboard chat=%s message=%s", chat_id, message_id)
 
     pending = pending_store.pop(telegram_user_id, None)
     if pending is None:
@@ -143,11 +322,11 @@ def handle_callback_query(update:dict) -> None:
             additional_text=pending["text"],
             sound_file=pending["sound_file"],
         )
-        _append_media_files(pending["portfolio_page_id"], pending["media_files"])
+        _append_media_files(pending["portfolio_page_id"], pending["media_files"],caption=pending.get("caption"))
         tg_send_message(
             chat_id=chat_id,
             token=portfolio_bot_token,
-            text="Data added to the PAST recording"
+            text="Data added to the PAST recording🏃‍♀️‍➡️",
         )
     
     elif callback_data == "finish":
@@ -163,12 +342,12 @@ def handle_callback_query(update:dict) -> None:
             text=pending["text"],
             sound_file=pending["sound_file"],
         )
-        _append_media_files(portfolio_page_id, pending["media_files"])
+        _append_media_files(portfolio_page_id, pending["media_files"], caption=pending.get("caption"))
 
         tg_send_message(
             chat_id=chat_id,
             token=portfolio_bot_token,
-            text="Data added to the NEW recording"
+            text="Data added to the NEW recording✏️"
         )
 
 
@@ -178,6 +357,11 @@ async def handle_telegram_data(update: dict) -> None:
         message=update.get("message") or update.get("edited_message")
         if not message:
             logger.info("No message in update, skipping. update_keys=%s", list(update.keys()))
+            return
+        
+        # if user send buk photos/videos and caption at the same time, store that to the buffer and debounce. and deal with it at once later
+        if message.get("media_group_id"):
+            await _buffer_media_group(message)
             return
 
         from_user= message["from"]
@@ -192,6 +376,7 @@ async def handle_telegram_data(update: dict) -> None:
 
         # Voice message & Text Message -> SST and Translate
         text = message.get("text")
+        caption = message.get("caption")
         file_url = ""
         note_text=""
 
@@ -315,6 +500,8 @@ async def handle_telegram_data(update: dict) -> None:
 
             if existing:
                 existing["media_files"].extend(media_files)
+                if caption and not existing.get("caption"):
+                    existing["caption"] = caption
                 if note_text:
                     existing["text"] = (existing["text"] + "\n" + note_text).strip()
                 if file_url and not existing["sound_file"]:
@@ -325,6 +512,7 @@ async def handle_telegram_data(update: dict) -> None:
                 "portfolio_page_id": portfolio_page_id,
                 "text": note_text,
                 "media_files": media_files,
+                "caption":caption,
                 "sound_file": file_url,
                 "started_at": result.started_at,
                 "notion_user_id": user_id,
@@ -349,6 +537,14 @@ async def handle_telegram_data(update: dict) -> None:
             return
 
         # Add Media(photo/video) to Media Property on Narrative DB
-        _append_media_files(portfolio_page_id, media_files)
+        _append_media_files(portfolio_page_id, media_files, caption=caption)
+
+        tg_send_message(
+            chat_id=chat["id"],
+            token=portfolio_bot_token,
+            text="Data recorded ✏️",
+        )
     except Exception:
         logger.exception("handle_telegram_data failed")
+
+

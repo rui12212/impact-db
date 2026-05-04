@@ -13,6 +13,7 @@ from core.config import (
     IMPACT_TELEGRAM_BOT_TOKEN,
     CHATBOT_TELEGRAM_SECRET_TOKEN,
     PORTFOLIO_TELEGRAM_SECRET_TOKEN,
+    TEST_PORTFOLIO_TELEGRAM_SECRET_TOKEN,
 )
 from impact_app.service import impact_process_update; load_dotenv()
 import requests

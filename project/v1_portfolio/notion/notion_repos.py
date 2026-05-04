@@ -374,6 +374,7 @@ def _make_blocks(items: list[tuple[str, str]]) -> list[dict]:
 def append_media_blocks_to_children(
     portfolio_page_id: str,
     media_items: list[tuple[str, str]],  # (kind, url)
+    caption: Optional[str] = None,
 ) -> None:
     """Add a 'Media' heading_3 + image/video blocks to page children."""
     notion = get_notion_client()
@@ -381,19 +382,32 @@ def append_media_blocks_to_children(
     # list[tuple[str, str]
     photos = [(k,u) for k,u in media_items if k == "photo"]
     videos = [(k,u) for k,u in media_items if k == "video"]
-    print(photos)
-    print(videos)
+
+    caption_block = None
+    if caption and caption.strip():
+        caption_rich_text = text_to_rich_text_blocks(caption)
+        for rt in caption_rich_text:
+            rt["annotations"] = {"bold": True, "color": "yellow_background"}
+        caption_block = {
+            "object": "block",
+            "type": "paragraph",
+            "paragraph": {"rich_text": caption_rich_text},
+        }
+
 
     for label, items in [("Photo", photos), ("Video", videos)]:
         if not items:
             continue
+        
+        children_to_append = _make_blocks(items)
+        if caption_block:
+            children_to_append.append(caption_block)
 
         existing_id = _find_heading_block_id(notion, portfolio_page_id, label)
-
         if existing_id:
             notion.blocks.children.append(
                 block_id=existing_id,
-                children=_make_blocks(items),
+                children=children_to_append,
             )
         else:
             # step1: create toggle heading
@@ -412,7 +426,7 @@ def append_media_blocks_to_children(
             new_heading_id = response["results"][0]["id"]
             notion.blocks.children.append(
                 block_id=new_heading_id,
-                children=_make_blocks(items),
+                children=children_to_append,
             )
 
 def append_media_to_portfolio(
