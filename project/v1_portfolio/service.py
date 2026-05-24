@@ -19,7 +19,7 @@ from telegram.ext import (
 from core.audio.helpers_audio import pick_audio_from_message
 from core.audio.stt_translate import oai_transcribe, oai_translate_km_to_en
 from zoneinfo import ZoneInfo
-from core.config import (PORTFOLIO_TELEGRAM_BOT_TOKEN, PORTFOLIO_TIMEZONE, TEST_PORTFOLIO_TELEGRAM_BOT_TOKEN)
+from core.config import (PORTFOLIO_TELEGRAM_BOT_TOKEN, PORTFOLIO_TIMEZONE)
 from core.locks import get_teacher_lock
 from core.telegram_helper import tg_get_file_url, tg_send_message
 from v1_portfolio.models import TelegramUserInfo, PortfolioDecisionResult
