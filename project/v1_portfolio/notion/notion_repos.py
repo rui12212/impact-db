@@ -6,14 +6,17 @@ from core.config import (
     NOTION_TEACHER_PORTFOLIO_DB,
     NOTION_PORTFOLIO_USER_DB,
 )
-portfolio_bot_token = PORTFOLIO_TELEGRAM_BOT_TOKEN
-portfolio_bot_window_minutes = PORTFOLIO_WINDOW_MINUTES
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from core.grouping import is_within_window, parse_iso, to_iso
 from core.config import PORTFOLIO_TIMEZONE
 from typing import Optional, Dict, Any, List
 from core.audio.stt_translate import portfolio_translate_note_km_to_en
+
+portfolio_bot_token = PORTFOLIO_TELEGRAM_BOT_TOKEN
+portfolio_bot_window_minutes = PORTFOLIO_WINDOW_MINUTES
+notion_portfolio_db=NOTION_TEACHER_PORTFOLIO_DB
+notion_user_db=NOTION_PORTFOLIO_USER_DB
 
 def build_display_name(user: TelegramUserInfo) -> str:
     parts = []
@@ -39,7 +42,7 @@ def get_or_create_user(user_info: TelegramUserInfo) -> str:
 
     resp = notion.databases.query(
         **{
-            "database_id": NOTION_PORTFOLIO_USER_DB,
+            "database_id": notion_user_db,
             "filter": {
                 "property": "telegram_user_id",
                 "number": {"equals": telegram_user_id},
@@ -63,7 +66,7 @@ def get_or_create_user(user_info: TelegramUserInfo) -> str:
 
     create_user_resp = notion.pages.create(
         **{
-            "parent": {"database_id": NOTION_PORTFOLIO_USER_DB},
+            "parent": {"database_id": notion_user_db},
             "properties": props,
         }
     )
@@ -74,7 +77,7 @@ def get_open_portfolio_by_teacher(user_id: str) -> Optional[Dict[str, Any]]:
 
     resp = notion.databases.query(
         **{
-            "database_id":NOTION_TEACHER_PORTFOLIO_DB,
+            "database_id":notion_portfolio_db,
             "filter": {
                 "and": [
                     {
@@ -116,7 +119,7 @@ def create_portfolio(
 
      resp = notion.pages.create(
         **{
-            "parent": {"database_id": NOTION_TEACHER_PORTFOLIO_DB},
+            "parent": {"database_id": notion_portfolio_db},
             "properties": props,
         }
      )
@@ -322,7 +325,7 @@ def check_and_close_portfolio(user_id: str, limit: int = 5) -> List[str]:
 
     resp = notion.databases.query(
         **{
-            "database_id": NOTION_TEACHER_PORTFOLIO_DB,
+            "database_id": notion_portfolio_db,
             "filter": {
                 "and": [
                     {"property": "user", "relation": {"contains": user_id}},
