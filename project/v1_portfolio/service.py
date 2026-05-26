@@ -3,7 +3,6 @@ import logging
 import os
 import tempfile
 import threading
-
 import requests
 from datetime import datetime, timezone
 from typing import Optional
@@ -35,11 +34,14 @@ from v1_portfolio.notion.notion_repos import (
     translate_note_and_update_translated_note,
 )
 from core.r2_client import upload_from_url, upload_from_path
-
 import asyncio
+from collections import OrderedDict
+
+_processed_msgs: OrderedDict[int, float] = OrderedDict()
+_MSG_TTL=300
+_MSG_MAX =1000
 
 logger = logging.getLogger(__name__)
-
 portfolio_bot_token = PORTFOLIO_TELEGRAM_BOT_TOKEN
 # ０：new/help以外のコマンドラインは常にhelpが発生するようにする
 
@@ -350,6 +352,23 @@ async def handle_callback_query(update: dict) -> None:
             text="Data added to the NEW recording✏️"
         )
 
+def _is_duplicate(message_id:int) -> bool:
+    import time
+    now = time.time()
+    while _processed_msgs:
+        _, ts = next(iter(_processed_msgs.items()))
+        if now - ts > _MSG_TTL:
+            _processed_msgs.popitem(last=False)
+        else:
+            break
+    if message_id in _processed_msgs:
+        return True
+    
+    _processed_msgs[message_id] = now
+    if len(_processed_msgs) > _MSG_MAX:
+        _processed_msgs.popitem(last=False)
+    return False
+
 
 # -----When Text/Audio/Video/Photo recieved-----
 async def handle_telegram_data(update: dict) -> None:
@@ -357,6 +376,11 @@ async def handle_telegram_data(update: dict) -> None:
         message=update.get("message") or update.get("edited_message")
         if not message:
             logger.info("No message in update, skipping. update_keys=%s", list(update.keys()))
+            return
+        
+        msg_id = message.get("message_id")
+        if msg_id and _is_duplicate(msg_id):
+            logger.info("Duplicate message_id=%s, skipping", msg_id)
             return
         
         # if user send buk photos/videos and caption at the same time, store that to the buffer and debounce. and deal with it at once later
@@ -404,9 +428,9 @@ async def handle_telegram_data(update: dict) -> None:
                         with open(src,'wb') as f:
                             for chunk in r.iter_content(8192):
                                 f.write(chunk)
-                    note_text = oai_transcribe(src, description)
+                    note_text = await asyncio.to_thread(oai_transcribe,src, description)
                     ext = os.path.splitext(original_name)[1] or ".ogg"
-                    file_url = upload_from_path(src, f"audio_f{file_id}{ext}", "audio/ogg")
+                    file_url = await asyncio.to_thread(upload_from_path, src, f"audio_f{file_id}{ext}", "audio/ogg")
 
 
         # photo/video
@@ -442,8 +466,8 @@ async def handle_telegram_data(update: dict) -> None:
                         with open(src, "wb") as f:
                             for chunk in r.iter_content(8192):
                                 f.write(chunk)
-                    note_text = oai_transcribe(src)
-                    file_url = upload_from_path(src, f"audio_{doc[file_id]}_{doc_file_name}", mime or "audio/mpeg")
+                    note_text = await asyncio.to_thread(oai_transcribe,src)
+                    file_url = await asyncio.to_thread(upload_from_path, src, f"audio_{doc[file_id]}_{doc_file_name}", mime or "audio/mpeg")
             else:
                 # if mime_type is empty or unclear, making sure with the extension
                 if file_name.endswith((".jpg", ".jpeg", ".png", ".JPEG", ".JPG", ".PNG", ".webp", ".heic", ".HEIC")):
