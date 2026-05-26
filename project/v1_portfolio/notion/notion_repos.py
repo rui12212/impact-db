@@ -112,7 +112,7 @@ def create_portfolio(
         "summary": {"title": [{"text": {"content": summary}}]},
         "created_at": {"date": {"start": start_timestamp_iso}},
         "user": {"relation": [{"id": user_id}]},
-        "note": {"rich_text": [{"text": {"content": text or ""}}]},
+        "note": {"rich_text": text_to_rich_text_blocks(text)},
         "sound_file": {"files": [{"name": "sound_file", "external": {"url": sound_file}}] if sound_file else []},
         "is_closed": {"checkbox": False},
      }
@@ -138,9 +138,7 @@ def create_portfolio(
             "object": "block",
             "type": "paragraph",
             "paragraph": {
-                "rich_text": [
-                    {"type": "text", "text": {"content": text or ""}}
-                ]
+                "rich_text": text_to_rich_text_blocks(text)
             },
         }
     ]
