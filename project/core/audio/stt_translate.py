@@ -10,11 +10,16 @@ from google import genai
 from google.genai import types
 from core.gemini_quota import check_and_increment, GeminiQuotaExceeded
 
+
+STT_MODEL = os.getenv("STT_MODEL", "gemini")
+TRANSLATE_MODEL = os.getenv("TRANSLATE_MODEL", "openai")
+
 OPEN_API_KEY = os.getenv('OPENAI_API_KEY')
 oai = OpenAI(api_key = OPEN_API_KEY)
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger('impactdb'
 )
+
 
 def oai_transcribe(file_path: str, description: Optional[str]=None) -> str:
     # 1 前処理（VADはまず無効で全文残す）
@@ -45,6 +50,7 @@ def oai_transcribe(file_path: str, description: Optional[str]=None) -> str:
     return full_text #0.9
 
 
+
 def oai_translate_km_to_en(text:str) -> str:
     try:
         msgs = [
@@ -52,7 +58,7 @@ def oai_translate_km_to_en(text:str) -> str:
             {'role': 'user', 'content': text}
         ]
 
-        r= oai.chat.completions.create(model='gpt-5-mini',messages=msgs)
+        r = oai.chat.completions.create(model='gpt-4.1',messages=msgs)
         en = r.choices[0].message.content.strip()
         return en
     except Exception as e:
@@ -61,14 +67,28 @@ def oai_translate_km_to_en(text:str) -> str:
 
 def portfolio_translate_note_km_to_en(text:str,model:str) -> str:
     try:
-        msgs = [
+
+        if "gemini" in model: 
+            check_and_increment()
+            GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+            client = genai.Client(api_key=GEMINI_API_KEY)
+            rs = client.models.generate_content(
+                model=model,
+                config=types.GenerateContentConfig(
+                    system_instruction="You are an excellent translator. Please return the text according to the following conditions:① Do not change anything written in English.② Translate only the parts written in Khmer into English.③ Even if parts of the text do not make sense when read as a whole, do not alter the meaning of the sentences. Do not summarize what is written.④ Return the text in the exact order of the original.",
+                ),
+                contents=[text]
+            )
+            return rs.text.strip()
+        
+        else:
+            msgs = [
             {'role': 'system', 'content': 'You are an excellent translator. Please return the text according to the following conditions:① Do not change anything written in English.② Translate only the parts written in Khmer into English.③ Even if parts of the text do not make sense when read as a whole, do not alter the meaning of the sentences. Do not summarize what is written.④ Return the text in the exact order of the original.'},
             {'role': 'user', 'content': text}
-        ]
-
-        r= oai.chat.completions.create(model=model,messages=msgs)
-        en = r.choices[0].message.content.strip()
-        return en
+            ]
+            r= oai.chat.completions.create(model=model,messages=msgs)
+            en = r.choices[0].message.content.strip()
+            return en
     except Exception as e:
         log.warning(f"OpenAI Translate failed: {e}")
 
@@ -364,7 +384,7 @@ def transcribe_gemini_km(file_path: str) -> str:
         with open(cpath, "rb") as f:
             audio_data=f.read()
             tr = client.models.generate_content(
-                model="gemini-2.5-flash", 
+                model="gemini-2.5-pro", 
                 contents=[
                     "Please transcribe the content of this audio verbatim in the language spoken (Khmer). Translation is not required.",
                     # client.files.upload(file=f),
@@ -390,7 +410,7 @@ def translate_gemini_km_to_en(km_text: str) -> str:
     try:
       client = genai.Client(api_key=GEMINI_API_KEY)
       rs = client.models.generate_content(
-          model="gemini-2.5-flash",
+          model="gemini-2.5-pro",
           config=types.GenerateContentConfig(
             system_instruction="You are an advanced Cambodian interpreter. Please translate the given text in to accurate English. Return str",
           ),
@@ -433,7 +453,7 @@ def detect_language(file_path: str, model_name: str = "gemini") -> str:
         with open(first_chunk_path, "rb") as f:
             audio_data = f.read()
             response = client.models.generate_content(
-                model="gemini-2.5-flash",
+                model="gemini-2.5-pro",
                 contents=[
                     "Listen to this audio and identify the language. "
                     "Reply with ONLY 'km' if the language is Khmer/Cambodian, "
@@ -500,7 +520,7 @@ def transcribe_gemini_en(file_path: str) -> str:
         with open(cpath, "rb") as f:
             audio_data = f.read()
             tr = client.models.generate_content(
-                model="gemini-2.5-flash",
+                model="gemini-2.5-pro",
                 contents=[
                     "Please transcribe the content of this audio verbatim in English.",
                     {
@@ -517,34 +537,89 @@ def transcribe_gemini_en(file_path: str) -> str:
     full_text = "\n".join(texts).strip()
     return full_text
 
+def decide_transcribe_model(
+    file_path: str,
+    model_name: str = None,
+    stt_model: str = None,
+    translate_model: str = None
+) -> tuple[str, str]:
 
-def decide_transcribe_model(file_path: str, model_name: str) -> tuple[str, str]:
+    stt_model = stt_model or model_name or STT_MODEL
+    translate_model = translate_model or TRANSLATE_MODEL
+
+    log.info(f"STT model: {stt_model} | Translate model: {translate_model}")
 
     try:
-      if model_name == "oai":
-          stt_km =  oai_transcribe(file_path)
-          translated_to_en = oai_translate_km_to_en(stt_km)
-          return stt_km, translated_to_en
-      
-      if model_name == "assemblyai":
-         stt_km, translated_en_text = transcribe_assemblyai_km_to_en(file_path)
-         return stt_km, translated_en_text
+        #Transcribe
+        if stt_model == "assemblyai":
+            return transcribe_assemblyai_km_to_en(file_path)
 
-      if model_name == "gladia":
-          stt_km, translated_en_text = transcribe_gladia_km_to_en(file_path)
-          return stt_km, translated_en_text
-    
-      if model_name == "elevenlabs":
-          stt_km = transcribe_elevenlabs_km(file_path)
-          translated_to_en = oai_translate_km_to_en(stt_km)
-          return stt_km, translated_to_en
-      
-      if model_name == "gemini":
-          stt_km = transcribe_gemini_km(file_path)
-          translated_to_en = translate_gemini_km_to_en(stt_km)
-          return stt_km, translated_to_en
-          
-      return "No Khmer", "No Eng"
-    
+        if stt_model == "gladia":
+            return transcribe_gladia_km_to_en(file_path)
+
+        if stt_model == "oai":
+            stt_km = oai_transcribe(file_path)
+
+        elif stt_model == "elevenlabs":
+            stt_km = transcribe_elevenlabs_km(file_path)
+
+        elif stt_model == "gemini":
+            stt_km = transcribe_gemini_km(file_path)
+
+        else:
+            log.warning(f"Unknown STT model: {stt_model}")
+            return "No Khmer", "No Eng"
+
+        #Translation
+        if translate_model == "gemini":
+            translated_en = translate_gemini_km_to_en(stt_km)
+        else:  
+            translated_en = oai_translate_km_to_en(stt_km)
+
+        return stt_km, translated_en
+
     except Exception as e:
-        raise RuntimeError(f"STT&Translation failed: {e}")
+        raise RuntimeError(f"STT & Translation failed: {e}")
+
+
+# def decide_transcribe_model(file_path: str, model_name: str = None, stt_model: str = None, translate_model: str = None) -> tuple[str, str]:
+
+#     stt_model = stt_model or model_name or STT_MODEL
+#     translate_model = translate_model or TRANSLATE_MODEL
+
+#     log.info(f"stt model:{stt_model} | translate model:{translate_model}")
+
+#     try:
+#       if stt_model == "oai":
+#           stt_km =  oai_transcribe(file_path)
+#           translated_to_en = oai_translate_km_to_en(stt_km)
+#           return stt_km, translated_to_en
+      
+#       if stt_model == "assemblyai":
+#          stt_km, translated_en_text = transcribe_assemblyai_km_to_en(file_path)
+#          return stt_km, translated_en_text
+
+#       if stt_model == "gladia":
+#           stt_km, translated_en_text = transcribe_gladia_km_to_en(file_path)
+#           return stt_km, translated_en_text
+    
+#       if stt_model == "elevenlabs":
+#           stt_km = transcribe_elevenlabs_km(file_path)
+#           translated_to_en = oai_translate_km_to_en(stt_km)
+#           return stt_km, translated_to_en
+      
+#       if stt_model == "gemini":
+#           stt_km = transcribe_gemini_km(file_path)
+#           translated_to_en = oai_translate_km_to_en(stt_km)
+#           return stt_km, translated_to_en
+          
+#       return "No Khmer", "No Eng"
+    
+
+      
+    
+#     except Exception as e:
+#         raise RuntimeError(f"STT&Translation failed: {e}")
+    
+
+

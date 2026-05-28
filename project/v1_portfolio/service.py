@@ -16,7 +16,7 @@ from telegram.ext import (
     filters,
 )
 from core.audio.helpers_audio import pick_audio_from_message
-from core.audio.stt_translate import oai_transcribe, oai_translate_km_to_en
+from core.audio.stt_translate import oai_transcribe, oai_translate_km_to_en, decide_transcribe_model
 from zoneinfo import ZoneInfo
 from core.config import (PORTFOLIO_TELEGRAM_BOT_TOKEN, PORTFOLIO_TIMEZONE)
 from core.locks import get_teacher_lock
@@ -140,7 +140,7 @@ async def _buffer_media_group(message:dict) -> None:
         
         # cancel the existing task and make new task
         if buf["task"] and not buf["task"].done():
-          buf["task"].cancel()
+            buf["task"].cancel()
 
         buf["task"] = asyncio.create_task(_flush_media_group(media_group_id))
 
@@ -403,6 +403,7 @@ async def handle_telegram_data(update: dict) -> None:
         caption = message.get("caption")
         file_url = ""
         note_text=""
+        translated_note_text = ""
 
 
         logger.info("message_keys=%s", list(message.keys()))
@@ -428,11 +429,14 @@ async def handle_telegram_data(update: dict) -> None:
                         with open(src,'wb') as f:
                             for chunk in r.iter_content(8192):
                                 f.write(chunk)
-                    note_text = await asyncio.to_thread(oai_transcribe,src, description)
+                    # note_text = oai_transcribe(src, description)
+                    stt_km, translated_en = decide_transcribe_model(src) 
+                    note_text = stt_km
+                    translated_note_text = translated_en
                     ext = os.path.splitext(original_name)[1] or ".ogg"
                     file_url = await asyncio.to_thread(upload_from_path, src, f"audio_f{file_id}{ext}", "audio/ogg")
 
-
+        
         # photo/video
         media_files: list[tuple[str,str]] = []
 
@@ -466,8 +470,12 @@ async def handle_telegram_data(update: dict) -> None:
                         with open(src, "wb") as f:
                             for chunk in r.iter_content(8192):
                                 f.write(chunk)
-                    note_text = await asyncio.to_thread(oai_transcribe,src)
-                    file_url = await asyncio.to_thread(upload_from_path, src, f"audio_{doc[file_id]}_{doc_file_name}", mime or "audio/mpeg")
+                        # note_text = oai_transcribe(src)
+                        stt_km, translated_en = decide_transcribe_model(src)
+                        note_text = stt_km
+                        translated_note_text = translated_en
+                        file_url = upload_from_path(src, f"audio_{doc[file_id]}_{doc_file_name}", mime or "audio/mpeg")
+
             else:
                 # if mime_type is empty or unclear, making sure with the extension
                 if file_name.endswith((".jpg", ".jpeg", ".png", ".JPEG", ".JPG", ".PNG", ".webp", ".heic", ".HEIC")):
@@ -498,7 +506,9 @@ async def handle_telegram_data(update: dict) -> None:
                 user_id=user_id,
                 message_dt=message_dt,
                 text=note_text,
-                sound_file=file_url
+                sound_file=file_url,
+                translated_note=translated_note_text 
+                
             )
 
         # tg_send_message(

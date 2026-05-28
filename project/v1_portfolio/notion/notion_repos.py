@@ -1,3 +1,4 @@
+import os 
 from v1_portfolio.notion.notion_client import get_notion_client
 from v1_portfolio.models import TelegramUserInfo, PortfolioDecisionResult
 from core.config import (
@@ -105,6 +106,7 @@ def create_portfolio(
     text: Optional[str] = None,
     sound_file: Optional[str] = None,
     media_file: Optional[str] = None,
+    translated_note: Optional[str] = None,
 ) -> str:
      notion = get_notion_client()
 
@@ -116,6 +118,11 @@ def create_portfolio(
         "sound_file": {"files": [{"name": "sound_file", "external": {"url": sound_file}}] if sound_file else []},
         "is_closed": {"checkbox": False},
      }
+
+     if translated_note and translated_note.strip():
+        props["translated_note"] = {
+            "rich_text": text_to_rich_text_blocks(translated_note)
+        }
 
      resp = notion.pages.create(
         **{
@@ -160,7 +167,7 @@ def text_to_rich_text_blocks(text: str, chunk: int=1900) -> list[dict]:
         for p in parts
     ]
 
-def append_and_update_portfolio_children(portfolio_page_id: str, additional_text: str, sound_file: Optional[str] = None) -> None:
+def append_and_update_portfolio_children(portfolio_page_id: str, additional_text: str, sound_file: Optional[str] = None, translated_note: Optional[str] = None,) -> None:
     notion = get_notion_client()
 
     # WHEN TEXT ADDED
@@ -209,6 +216,11 @@ def append_and_update_portfolio_children(portfolio_page_id: str, additional_text
         "note": {"rich_text": text_to_rich_text_blocks(new_text)},
     }
 
+    if translated_note and translated_note.strip():
+        props_to_update["translated_note"] = {
+            "rich_text": text_to_rich_text_blocks(translated_note)
+        }
+
     if sound_file:
         page = notion.pages.retrieve(portfolio_page_id)
         existing = page.get("properties", {}).get("sound_file", {}).get("files", []) or []
@@ -232,6 +244,7 @@ def decide_and_get_or_create_portfolio(
     message_dt: datetime,
     text: Optional[str] = None,
     sound_file: Optional[str] = None,
+    translated_note: Optional[str] = None,
 ) -> PortfolioDecisionResult:
     if message_dt.tzinfo is None:
         message_dt = message_dt.replace(tzinfo=timezone.utc)
@@ -248,6 +261,7 @@ def decide_and_get_or_create_portfolio(
             start_timestamp_iso=start_iso,
             text=text,
             sound_file=sound_file,
+            translated_note=translated_note,
         )
         return PortfolioDecisionResult(
             portfolio_page_id=portfolio_page_id,
@@ -276,6 +290,7 @@ def decide_and_get_or_create_portfolio(
             portfolio_page_id=portfolio_page_id,
             additional_text=text,
             sound_file=sound_file,
+            translated_note=translated_note,
         )
         return PortfolioDecisionResult(
             portfolio_page_id=portfolio_page_id,
@@ -301,7 +316,15 @@ def translate_note_and_update_translated_note(portfolio_page_id:str) -> None:
     note_blocks = page.get("properties", {}).get("note", {}).get("rich_text",[]) or []
     note = "".join(r.get("plain_text","") for r in note_blocks)
 
-    translated_note = portfolio_translate_note_km_to_en(note, "gpt-4.1-mini")
+    translate_model = os.getenv("TRANSLATE_MODEL", "openai")
+    if translate_model == "openai" or translate_model == "oai":
+        actual_model = "gpt-4.1"
+    elif translate_model == "gemini":
+        actual_model = "gemini-2.5-pro"
+    else:
+        actual_model = translate_model 
+
+    translated_note = portfolio_translate_note_km_to_en(note, actual_model)
 
     notion.pages.update(
         **{

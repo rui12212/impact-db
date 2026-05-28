@@ -13,6 +13,7 @@ from core.config import (
     IMPACT_TELEGRAM_BOT_TOKEN,
     CHATBOT_TELEGRAM_SECRET_TOKEN,
     PORTFOLIO_TELEGRAM_SECRET_TOKEN,
+    TEST_PORTFOLIO_TELEGRAM_SECRET_TOKEN
 )
 from impact_app.service import impact_process_update; load_dotenv()
 import requests
@@ -79,6 +80,22 @@ async def portfolio_webhook(request: Request, background: BackgroundTasks):
 
     return JSONResponse({"ok": True})
 
+@app.post('/telegram/test-daniel/v1/portfolio/webhook')
+async def portfolio_webhook(request: Request, background: BackgroundTasks):
+    secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
+    if secret != TEST_PORTFOLIO_TELEGRAM_SECRET_TOKEN:
+        raise HTTPException(status_code=401, detail='Invalid secret token for portfolio')
+    update = await request.json()   
+
+    if "callback_query" in update:
+        background.add_task(handle_callback_query, update)
+    elif (update.get("message",{}).get("entities") or [{}])[0].get("type") == "bot_command":
+        background.add_task(handle_command, update)
+    else:
+        background.add_task(handle_telegram_data, update)
+
+    return JSONResponse({"ok": True})
+
 
 @app.post('/telegram/test/v1/portfolio/webhook')
 async def portfolio_webhook(request: Request, background: BackgroundTasks):
@@ -95,7 +112,6 @@ async def portfolio_webhook(request: Request, background: BackgroundTasks):
         background.add_task(handle_telegram_data, update)
 
     return JSONResponse({"ok": True})
-
 
 if USE_POLLING:
     # Store bot applications globally for shutdown
