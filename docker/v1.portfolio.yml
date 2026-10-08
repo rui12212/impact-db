@@ -1,20 +1,25 @@
-version: '3.8'
+# V1: portfolio bot
+# 旧 docker-compose.portfolio.yml から移行（2026-09-30）
+#
+# 実行はリポジトリルートから:
+#   docker compose -f docker/v1.portfolio.yml up -d
+name: impact-v1-portfolio
 
 services:
   app:
     build:
-      context: .
+      context: ..
       dockerfile: Dockerfile
     env_file:
-      - .env
+      - ../env/v1.env
     container_name: portfolio-bot
     ports:
       - "8000:8000"
     volumes:
-      - ./.env:/app/.env
-      - ./credentials:/app/credentials:ro
-      - ./.chroma_categories:/app/.chroma_categories
-      - ./.runtime:/app/.runtime
+      - ../env/v1.env:/app/.env
+      - ../credentials:/app/credentials:ro
+      - ../.chroma_categories:/app/.chroma_categories
+      - ../.runtime:/app/.runtime
     environment:
       - USE_POLLING=False
       - PYTHONUNBUFFERED=1

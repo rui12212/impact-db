@@ -1,0 +1,32 @@
+# V1: ローカル開発用（ホットリロード）
+# 旧 docker-compose.local.yml から移行（2026-09-30）
+#
+# 実行はリポジトリルートから:
+#   docker compose -f docker/v1.local.yml up -d --build
+name: impact-v1-local
+
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: local-portfolio
+    ports:
+      - "8000:8000"
+    volumes:
+      # ⚠️ 旧 ./.env.local は存在しなかった。env/v1.local.env を作ってから使う
+      - ../env/v1.local.env:/app/.env
+      - ../credentials:/app/credentials:ro
+      - ../.chroma_categories:/app/.chroma_categories
+      - ../.runtime:/app/.runtime
+      # ホットリロード用にコードをマウント
+      - ../project:/app/project
+    environment:
+      - USE_POLLING=false
+    command: uvicorn project.main:app --reload --host 0.0.0.0 --port 8000
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

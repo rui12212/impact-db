@@ -1,0 +1,64 @@
+# V2: ローカル開発用
+#
+# 実行はリポジトリルートから:
+#   docker compose -f docker/v2.local.yml up -d --build
+#
+# スクリプトを動かす:
+#   docker compose -f docker/v2.local.yml exec app \
+#     python project/v2_app/scripts/notion_db_create.py
+#
+# ⚠️ V1（portfolio-bot）がホストの 8000 を使っているため、V2は 8001 に割り当てる
+name: impact-v2
+
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: impact-v2-app
+    env_file:
+      - ../env/v2.local.env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app/project
+      # compose内のサービス名で解決する（env_file の値を上書き）
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      # コードをマウント（ホットリロード + スクリプトの変更が即反映される）
+      - ../project:/app/project
+      # スクリプトが /app/env/v2.local.env を読めるようにする
+      # （.dockerignore で env/ はイメージから除外しているため、実行時にマウントする）
+      - ../env:/app/env:ro
+      - ../.runtime:/app/.runtime
+    ports:
+      - "8001:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    # フェーズ3でBotを立てるまでは常駐させておくだけにする。
+    # v2_app/main.py を作ったら下の uvicorn に差し替える
+    command: ["sleep", "infinity"]
+    # command: uvicorn v2_app.main:app --reload --host 0.0.0.0 --port 8000
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  redis:
+    image: redis:7-alpine
+    container_name: impact-v2-redis
+    # ローカル開発では永続化しない（消えても入力途中データだけ）
+    # 本番の永続化方針は未決定 → v2-todo.md B-10
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      # ホストから redis-cli で覗けるようにする
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped

@@ -7,6 +7,8 @@ load_dotenv()
 from typing import Any, Dict, Optional,List, Tuple
 
 
+from impact_app.categorization.categories import category_select_options
+
 REG_PATH = Path(".runtime/chat_registry.json")
 REG_PATH.parent.mkdir(parents=True, exist_ok=True)
 NOTION_ROOT_PAGE_ID = os.getenv("NOTION_ROOT_PAGE_ID")
@@ -48,16 +50,7 @@ def _make_child_database(parent_page_id: str) -> str:
             "Date": {"date": {}},
             "STT_Km": {"rich_text": {}},
             "Translated_En": {"rich_text": {}},
-            "Category": {"select": {
-                "options": [
-                    {"name": "Teacher/Methods", "color": "green"},
-                    {"name":"Mass Students","color":"gray"},
-                    {"name":"Individual Character","color":"yellow"},
-                    {"name":"Individual Evaluation","color":"orange"},
-                    {"name":"Individual Verification","color":"purple"},
-                    {"name":"Learning of how Student Learn","color":"blue"},
-                ]
-            }},
+            "Category": {"select": {"options": category_select_options()}},
             # "CategoryConfidence": {"number": {"format":"number"}},
             "AudioURL": {"url": {}},
             "ChatID": {"number": {}},

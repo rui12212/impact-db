@@ -17,46 +17,8 @@ SEED_PATH = os.path.join(BASE_DIR, SEED_FILE)
 CATEGORY_MODE=os.getenv("CATEGORY_MODE")
 
 # ===Categorize teachers' comment into 7 types===
-CATEGORIES = [
-    "0:Teacher/Methods",
-    "1:Mass Students",
-    "2a:Individual Character",
-    "2b:Individual Evaluation",
-    "2c:Individual Verification",
-    "2d:Learning of how Student Learn",
-    "fact:Mentioning facts"
-]
-
-CATEGORY_DEFINITIONS = {
-    "0:Teacher/Methods": {
-        "definition": "Discussions about topics other than classes and students",
-        "example": "When the teacher asked the students to make English sentences, he made sure that it should not make the same one. By doing so, the four students were able to create four different things. I thought it was very effective."
-    },
-    "1:Mass Students": {
-        "definition": "Speaking of numerous students (They, Students, etc.)",
-        "example": "The students in this class enjoyed the discussion. I realized that the students want to learn and become proactive when they link the topic with their own future."
-    },
-    "2a:Individual Character": {
-        "definition": "Describing the student's personality (This student is shy)",
-        "example": "Student A could not concentrate on if the topic went to about difficult math. I wonder how I can attract him."
-    },
-    "2b:Individual Evaluation": {
-        "definition": "Discussing student learning assessments (understood well, did not understand)",
-        "example": "I was very impressed with the student B presentation. It was very good as it was beyond my expectations."
-    },
-    "2c:Individual Verification": {
-        "definition": "Comments verifying student learning (whether learning tasks were appropriate, how group learning and questions influenced their actions)",
-        "example": "Student C started writing something in his notebook but when the teacher asked to take notes he stopped writing it."
-    },
-    "2d:Learning of how Student Learn": {
-        "definition": "State what you have learned from the observed facts.",
-        "example": "Student D writes down the numbers that student E tells him. He wrote down the numbers that he gave him but he didn't know what the numbers meant. He had the numbers in his hand but he didn't know how to graph them. I realized I always checked the worksheets and notebooks to see how far that child has progressed, however this does not mean that he or she understands the subject matter."
-    },
-    "fact:Mentioning facts": {
-        "definition": "Mentioning what you observe, what you see",
-        "example": "I realised the students took note about the triangles and squares. Other students also watched it and tried to copy it on his textbook."
-    },
-}
+# カテゴリー定義は categories.py が単一の正。
+from impact_app.categorization.categories import CATEGORIES, CATEGORY_DEFINITIONS
 
 emb = OpenAIEmbeddings(model=EMBED_MODEL)
 llm = ChatOpenAI(model=LLM_MODEL,temperature=0.2)
@@ -125,7 +87,7 @@ def _embed_vote(text_en:str, k: int= 5) -> Tuple[str, float, List[Dict[str, Any]
     counts: Dict[str,List[float]] = {c: [] for c in CATEGORIES}
     evidence: List[Dict[str, Any]] =[]
     for doc, score in results:
-        cat = doc.metadata.get("category", "0:Teacher/Methods")
+        cat = doc.metadata.get("category", CATEGORIES[0])
         counts[cat].append(float(score))
         evidence.append({"category": cat, "score": float(score), "example":doc.page_content[:300]})
     best = max(CATEGORIES, key=lambda c:(len(counts[c]), sum(counts[c])/len(counts[c]) if counts[c] else 0.0))
@@ -158,7 +120,7 @@ def _llm_refine(text_en:str, evidence: List[Dict[str, Any]]) -> Tuple[str, float
         return cat, conf, rat
     except Exception as e:
         log.warning(f"LLM refine JSON parse failed: {e}")
-        fallback_cat = evidence[0]["category"] if evidence else "0:Teacher/Methods"
+        fallback_cat = evidence[0]["category"] if evidence else CATEGORIES[0]
         return fallback_cat, 0.0, "LLM parse error"
 
 def categorize(text_en:str) -> Dict[str,Any]:

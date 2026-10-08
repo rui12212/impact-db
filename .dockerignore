@@ -21,9 +21,12 @@ build/
 
 # Virtual environments
 venv/
-env/
 ENV/
 impact_db_env/
+
+# Environment files
+# env_file / volume でホストから注入するので、イメージには含めない
+env/
 
 # IDE
 .vscode/
@@ -55,6 +58,7 @@ README.md
 # Docker
 Dockerfile
 docker-compose.yml
+docker/
 .dockerignore
 
 # Test files

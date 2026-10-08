@@ -10,6 +10,7 @@ from core.audio.stt_translate import decide_transcribe_model, oai_transcribe, oa
 from core.text_cleaner import remove_fillers
 from core.gemini_quota import GeminiQuotaExceeded
 from impact_app.categorization.categorizer import categorize
+from impact_app.categorization.categories import category_label
 from impact_app.notion.notion_client import create_or_update_notion_page, ensure_training_space
 from core.telegram_helper import tg_get_file_url, tg_send_message
 from core.config import IMPACT_TELEGRAM_BOT_TOKEN
@@ -109,7 +110,7 @@ def impact_process_update(update:Dict[str, Any]):
         "Date": {'date': {'start':now_iso}},
         "STT_Km": rt_prop(stt_text_km),
         "Translated_En": rt_prop(translated_en_text),
-        "Category": {"select":{"name": category}},
+        "Category": {"select":{"name": category_label(category)}},
         # "CategoryConfidence": {"number": category_conf},
         "AudioURL":{'url': file_url},
         "ChatID": {'number': chat_id if chat_id is not None else 0},
