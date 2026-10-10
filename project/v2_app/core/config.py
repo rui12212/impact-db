@@ -12,6 +12,7 @@ V1のキー（NOTION_API_KEY など）は参照しない。
 """
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -69,6 +70,7 @@ R2_SECRET_ACCESS_KEY = _get("R2_SECRET_ACCESS_KEY")
 R2_BUCKET_NAME = _get("R2_BUCKET_NAME")
 R2_FOLDER = _get("R2_FOLDER")
 R2_PUBLIC_URL_BASE = _get("R2_PUBLIC_URL_BASE")
+
 
 # --- Slack（Bot Token方式。2026-10-09決定）---
 SLACK_BOT_TOKEN = _get("V2_SLACK_BOT_TOKEN")

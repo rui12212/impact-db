@@ -10,7 +10,16 @@ from __future__ import annotations
 
 import sys
 
-from v2_app.tests import test_config, test_flow, test_media, test_prompts, test_session
+from v2_app.tests import (
+    test_config,
+    test_flow,
+    test_media,
+    test_prompts,
+    test_reflection,
+    test_registry,
+    test_schemas,
+    test_session,
+)
 from v2_app.tests.harness import report
 
 SUITES = [
@@ -18,6 +27,9 @@ SUITES = [
     test_flow.suite,
     test_media.suite,
     test_prompts.suite,
+    test_reflection.suite,
+    test_registry.suite,
+    test_schemas.suite,
     test_session.suite,
 ]
 

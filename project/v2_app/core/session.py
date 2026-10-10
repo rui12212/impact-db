@@ -8,6 +8,8 @@ from v2_app.core.config import SESSION_TTL_SECONDS
 from v2_app.core.redis_client import get_redis
 
 TTL = SESSION_TTL_SECONDS
+APPS = ("reflection", "practice", "lesson_study", "research_question", "settings")
+
 
 def _route_key(telegram_id: int) -> str:
     return f"route:{telegram_id}"
@@ -20,6 +22,9 @@ def _history_key(app: str, telegram_id:int) -> str:
 
 def _user_key(telegram_id:int) -> str:
     return f"user:{telegram_id}"
+
+def _pending_key(app: str, telegram_id: int) -> str:
+    return f"{app}:pending:{telegram_id}"
 
 # route
 def get_route(telegram_id: int) -> Optional[str]:
@@ -80,8 +85,37 @@ def clear_session(app: str, telegram_id:int) -> None:
     get_redis().delete(
         _session_key(app, telegram_id),
         _history_key(app, telegram_id),
+        _pending_key(app, telegram_id),
         _route_key(telegram_id),
     )
+
+def clear_all_sessions(telegram_id: int) -> None:
+    """入力中のデータを全モード分捨てる（proposal §4-7 A案）。
+
+    route を上書きするだけでは前のモードの session と history が
+    3日間残る。モードを選んだら必ず白紙から始めるために回す。
+    user:{telegram_id} は対象外（所属・言語は消さない）。
+    """
+    for app in APPS:
+        clear_session(app, telegram_id)
+
+# pending: 次に来るメッセージが何の入力かを覚えておく。
+# settings モードが使う（名前の入力待ちなど）。
+# filled に混ぜると Notion のプロパティと紛らわしいので別キーにする。
+def get_pending(app: str, telegram_id: int) -> str:
+    """何の入力を待っているか。待っていなければ空文字。"""
+    return get_redis().get(_pending_key(app, telegram_id)) or ""
+
+def set_pending(app: str, telegram_id: int, value: str) -> None:
+    """入力待ちにする。空文字を渡すと解除する。
+
+    update_filled では解除できない（None を無視する作りなので）。
+    """
+    key = _pending_key(app, telegram_id)
+    if not value:
+        get_redis().delete(key)
+        return
+    get_redis().set(key, value, ex=TTL)
 
 # history
 def append_history(app: str, telegram_id:int, role:str, content: str) -> None:
@@ -115,6 +149,24 @@ def set_lang(telegram_id: int, lang:str) -> None:
 
 def clear_user(telegram_id: int) -> None:
     get_redis().delete(_user_key(telegram_id))
+
+
+def acquire_lock(name: str, telegram_id: int, ttl: int = 60) -> bool:
+    """鍵を取る。取れたら True、既に誰かが持っていたら False。
+
+    SETNX（nx=True）は「キーが無い時だけ書く」という操作で、
+    Redis 側で1つの命令として実行される。だから2回のタップが
+    同時に来ても、必ず片方だけが True を受け取る。
+
+    TTL を付けるのは、保存中に落ちた時に鍵が残り続けないため。
+    """
+    return bool(
+        get_redis().set(f"lock:{name}:{telegram_id}", "1", nx=True, ex=ttl)
+    )
+
+
+def release_lock(name: str, telegram_id: int) -> None:
+    get_redis().delete(f"lock:{name}:{telegram_id}")
     
 
 

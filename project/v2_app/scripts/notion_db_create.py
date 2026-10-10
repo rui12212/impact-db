@@ -231,7 +231,9 @@ def build_all(notion: Client, reg: Dict[str, str]) -> None:
         "Aim": TEXT,
         "Content": TEXT,
         "Reflection": TEXT,  # やってみてどうだったか（2026-10-02追加）
-        "Materials": multi("写真", "動画", "授業案", "音声"),
+        # 先生が見る画面に出るので英語にする（Botは英語とクメール語のみ）。
+        # apps/practice/schema.py の MATERIAL_BY_KIND と一致させること
+        "Materials": multi("Photo", "Video", "Audio", "Document"),
         "Image": FILES,
         "Video": FILES,
         "Files": FILES,

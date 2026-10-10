@@ -64,7 +64,11 @@ async def get_or_create_user(
     if page is None:
         page = await create_user(telegram_id, teacher_name, username)
 
+    # cached を展開してから上書きする。lang のように Notion に
+    # 置き場所が無く Redis が正本の項目を消さないため。
+    # 項目を足す時もこのマージを崩さないこと
     data = {
+        **(cached or {}),
         "notion_page_id": page["id"],
         "name": _title(page, "Teacher Name"),
         "role": _select(page, "Role") or DEFAULT_ROLE,
@@ -152,3 +156,22 @@ async def set_school(
 
 def _today() -> str:
     return date.today().isoformat()
+
+async def rename(telegram_id: int, new_name: str) -> Dict[str, Any]:
+    """先生の表示名を変える。Notion と Redis の両方を直す。
+
+    ⚠️ Redis を直し忘れると、以降の Slack 投稿や返信で古い名前が出続ける。
+    """
+    user = await get_or_create_user(telegram_id)
+    page_id = user.get("notion_page_id")
+    if not page_id or not new_name:
+        return user
+
+    await update_page(
+        page_id,
+        {"Teacher Name": {"title": [{"text": {"content": new_name[:2000]}}]}},
+    )
+
+    user["name"] = new_name
+    session.set_user(telegram_id, user)
+    return user
