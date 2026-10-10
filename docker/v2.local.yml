@@ -35,10 +35,12 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-    # フェーズ3でBotを立てるまでは常駐させておくだけにする。
-    # v2_app/main.py を作ったら下の uvicorn に差し替える
-    command: ["sleep", "infinity"]
-    # command: uvicorn v2_app.main:app --reload --host 0.0.0.0 --port 8000
+    # --reload-dir を指定しないと /app 配下すべてを監視してしまい、
+    # V1のコードやvenvの変更でも再起動がかかる
+    command: >
+      uvicorn v2_app.main:app --reload
+      --host 0.0.0.0 --port 8000
+      --reload-dir /app/project/v2_app
     restart: unless-stopped
     logging:
       driver: "json-file"

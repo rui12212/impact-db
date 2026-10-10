@@ -39,7 +39,7 @@ def _() -> None:
 @suite.case("next_question は最初の未充足な必須項目の質問")
 def _() -> None:
     q = flow.next_question(DAILY_FIELDS, {})
-    assert q == "今日の授業はどうでしたか？", q
+    assert q == "How was your lesson today?", q
 
 
 @suite.case("空文字は未充足として扱う")
@@ -144,15 +144,15 @@ def _() -> None:
 
 @suite.case("render_confirmation は埋まっている ask 項目だけ出す")
 def _() -> None:
-    text = flow.render_confirmation(DAILY_FIELDS, {"note": "分数", "summary": "見出し"})
-    assert text == "振り返り: 分数", repr(text)
+    text = flow.render_confirmation(DAILY_FIELDS, {"note": "fractions", "summary": "x"})
+    assert text == "Reflection: fractions", repr(text)
 
 
 @suite.case("render_confirmation は120文字で省略する")
 def _() -> None:
     text = flow.render_confirmation(DAILY_FIELDS, {"note": "あ" * 200})
     assert text.endswith("…")
-    assert len(text) == len("振り返り: ") + 121
+    assert len(text) == len("Reflection: ") + 121
 
 
 @suite.case("render_confirmation: 何も無ければ案内文")

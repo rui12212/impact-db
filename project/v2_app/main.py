@@ -12,6 +12,14 @@ from v2_app.core.config import TELEGRAM_SECRET_TOKEN, assert_configured
 from v2_app.router import dispatcher
 
 logging.basicConfig(level=logging.INFO)
+
+# ⚠️ httpx はリクエストURL全体をINFOで出す。Telegram はトークンが
+# パスに入る設計（api.telegram.org/bot<TOKEN>/sendMessage）なので、
+# そのままだとログファイルにBotトークンが残り続ける。
+# Notion / OpenAI はキーをヘッダーに入れるのでURLには出ない。
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
 log = logging.getLogger("impactdb.v2")
 
 app = FastAPI(title="Impact DB V2")
@@ -63,6 +71,12 @@ async def webhook(
     「返事が無い」と判断して同じ update を再送してくる。
     だから先に200を返して、処理は裏に回す。
     """
+    # ⚠️ 未設定のときに通してはいけない。空同士の比較が一致して
+    # しまい、ヘッダー無しのリクエストが全部受け入れられる
+    if not TELEGRAM_SECRET_TOKEN:
+        log.error("V2_TELEGRAM_SECRET_TOKEN が未設定。webhookを受け付けない")
+        raise HTTPException(status_code=503, detail="Webhook not configured")
+
     if x_telegram_bot_api_secret_token != TELEGRAM_SECRET_TOKEN:
         raise HTTPException(status_code=401, detail="Invalid secret token")
 

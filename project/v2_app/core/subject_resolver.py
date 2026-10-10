@@ -99,7 +99,7 @@ async def resolve(
     # AIに選ばせる
     names = [name for _, name, _ in candidates if name]
     listing = "\n".join(
-        f"- {name}" + (f"（{name_km}）" if name_km else "")
+        f"- {name}" + (f" ({name_km})" if name_km else "")
         for _, name, name_km in candidates
         if name
     )
@@ -107,7 +107,7 @@ async def resolve(
     try:
         result = await complete_json(
             SYSTEM,
-            f"【候補】\n{listing}\n\n【先生の言葉】\n{subject_text}",
+            f"[Candidates]\n{listing}\n\n[What the teacher said]\n{subject_text}",
             SCHEMA,
             schema_name="subject_match",
             model=MODEL_EXTRACT,

@@ -57,7 +57,7 @@ async def make_summary(
     Title は必須なので、失敗しても必ず何かを返す。
     """
     body = _main_text(fields, filled)
-    fallback = (body[:30] or "（無題）")
+    fallback = (body[:30] or "(untitled)")
 
     if not body:
         return fallback

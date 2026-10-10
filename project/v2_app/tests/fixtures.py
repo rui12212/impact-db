@@ -9,8 +9,8 @@ Field = Dict[str, Any]
 DAILY_FIELDS: List[Field] = [
     {
         "key": "note",
-        "label": "振り返り",
-        "question": "今日の授業はどうでしたか？",
+        "label": "Reflection",
+        "question": "How was your lesson today?",
         "source": "ask",
         "required": True,
         "notion_prop": "Note",
@@ -18,8 +18,8 @@ DAILY_FIELDS: List[Field] = [
     },
     {
         "key": "subject",
-        "label": "教科",
-        "question": "何の教科でしたか？",
+        "label": "Subject",
+        "question": "Which subject was it?",
         "source": "ask",
         "required": False,
         "notion_prop": "Subject",
@@ -27,14 +27,14 @@ DAILY_FIELDS: List[Field] = [
     },
     {
         "key": "summary",
-        "label": "見出し",
+        "label": "Summary",
         "source": "ai",
         "notion_prop": "Summary",
         "notion_type": "title",
     },
     {
         "key": "keywords",
-        "label": "キーワード",
+        "label": "Keywords",
         "source": "ai",
         "notion_prop": "Keywords",
         "notion_type": "multi_select",
@@ -62,7 +62,7 @@ DAILY_FIELDS: List[Field] = [
         "key": "scratch",
         "source": "ask",
         "required": False,
-        "question": "（内部用）",
+        "question": "(internal)",
         "notion_type": "rich_text",
     },
 ]

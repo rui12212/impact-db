@@ -16,7 +16,8 @@ SYSTEM_FIELD = """You are helping a teacher record a reflection on their own tea
 Ask about ONE missing item, as a natural question in conversation.
 
 Rules:
-- Reply in the SAME language the teacher is using.
+- Reply ONLY in English or Khmer. NEVER in Japanese or any other language.
+- Match the language the teacher is writing in. If unclear, use English.
 - One or two short sentences. No preamble, no explanation.
 - Do NOT sound like a form. Ask as a person would.
 - Do NOT give advice. Just ask.
@@ -28,7 +29,8 @@ The teacher has already written what happened. Ask ONE question that invites
 them to look more closely at what they observed.
 
 Rules:
-- Reply in the SAME language the teacher is using.
+- Reply ONLY in English or Khmer. NEVER in Japanese or any other language.
+- Match the language the teacher is writing in. If unclear, use English.
 - One or two short sentences.
 - Ask about what they SAW, or what they might try next.
 - Do NOT give advice. Do NOT evaluate. Do NOT praise.
@@ -59,8 +61,8 @@ async def _ask_field(field: flow.Field, history:List[Dict[str, str]], model:Opti
     fallback = field["question"]
 
     user = (
-        f"[聞きたいこと]\n{fallback}\n\n"
-        f"[これまでの会話]\n{format_history(history[-HISTORY_LAST_N:])}"
+        f"[What to ask about]\n{fallback}\n\n"
+        f"[Conversation so far]\n{format_history(history[-HISTORY_LAST_N:])}"
     )
 
     try:
@@ -77,8 +79,8 @@ async def _ask_field(field: flow.Field, history:List[Dict[str, str]], model:Opti
 
 async def _ask_followup(fields: List[flow.Field], filled:Dict[str,Any],history:List[Dict[str,str]], model:Optional[str]) -> Optional[str]:
     user = (
-        f"【これまでの会話】\n{format_history(history[-HISTORY_LAST_N:])}\n\n"
-        f"【記録された内容】\n{flow.render_confirmation(fields, filled)}"
+        f"[Conversation so far]\n{format_history(history[-HISTORY_LAST_N:])}\n\n"
+        f"[What has been recorded]\n{flow.render_confirmation(fields, filled)}"
     )
 
     try:

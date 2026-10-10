@@ -288,7 +288,9 @@ async def _save(
 
         if post_to_slack:
             try:
-                text = await summarize.make_slack_text(user.get("name", ""), filled)
+                text = await summarize.make_slack_text(
+                    user.get("name", ""), fields, filled
+                )
                 if text:
                     await slack.post(text, school_name=user.get("school_name", ""))
             except Exception:

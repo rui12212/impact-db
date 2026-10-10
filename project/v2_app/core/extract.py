@@ -25,16 +25,21 @@ def _describe_fields(fields: List[flow.Field]) -> str:
     for f in flow.asked_fields(fields):
         label = f.get("label") or f["key"]
         hint = f.get("question") or ""
-        lines.append(f'- {f["key"]}: {label}' + (f"（{hint}）" if hint else ""))
+        lines.append(f'- {f["key"]}: {label}' + (f" ({hint})" if hint else ""))
     return "\n".join(lines)
 
 
 def format_history(history: List[Dict[str, str]]) -> str:
+    """会話履歴をプロンプトに入れる形にする。
+
+    ⚠️ ラベルは英語にする。日本語を混ぜるとモデルがそれを真似て
+    日本語で返してくる（Botは英語とクメール語のみ）。
+    """
     if not history:
-        return "(なし)"
-    role_ja = {"user": "先生", "assistant": "Bot"}
+        return "(none)"
+    role_en = {"user": "Teacher", "assistant": "Bot"}
     return "\n".join(
-        f'{role_ja.get(h["role"], h["role"])}: {h["content"]}' for h in history
+        f'{role_en.get(h["role"], h["role"])}: {h["content"]}' for h in history
     )
 
 
@@ -58,9 +63,9 @@ async def extract_values(
     recent = history[-last_n:] if last_n else history
 
     user = (
-        f"【抽出する項目】\n{_describe_fields(fields)}\n\n"
-        f"【これまでの会話】\n{format_history(recent)}\n\n"
-        f"【最新の発言】\n{latest_text}"
+        f"[Fields to extract]\n{_describe_fields(fields)}\n\n"
+        f"[Conversation so far]\n{format_history(recent)}\n\n"
+        f"[Latest message]\n{latest_text}"
     )
 
     result = await complete_json(
