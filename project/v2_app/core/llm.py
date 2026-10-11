@@ -28,8 +28,11 @@ TIMEOUT_SECONDS = 30
 #     （max_completion_tokens=120 で出力0文字・finish_reason="length"）
 REASONING_PREFIXES = ("gpt-5", "o1", "o3", "o4")
 
-# 推論モデルに渡す下限。これ未満だと空文字が返る危険がある
-MIN_COMPLETION_TOKENS = 1500
+# 推論モデルに渡す下限。
+# 実測（2026-10-11・gpt-5-mini）: 推論だけで 1,200〜1,500 使う。
+# 1,500 だと本文が0文字になる。クメール語は英語の3〜5倍のトークンを使う。
+# 上限なので実際の課金は使った分だけ。上げてもコストは変わらない
+MIN_COMPLETION_TOKENS = 4000
 
 _RETRY = dict(
     retry=retry_if_exception_type(

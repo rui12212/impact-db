@@ -110,6 +110,7 @@ PERCENT: Dict[str, Any] = {"number": {"format": "percent"}}
 DATE: Dict[str, Any] = {"date": {}}
 CHECK: Dict[str, Any] = {"checkbox": {}}
 FILES: Dict[str, Any] = {"files": {}}
+URL: Dict[str, Any] = {"url": {}}
 
 
 def load_category_options() -> List[Dict[str, str]]:
@@ -171,6 +172,8 @@ def build_all(notion: Client, reg: Dict[str, str]) -> None:
         "School Name": TITLE,
         "Country": sel("日本", "カンボジア", colors=["blue", "orange"]),
         "Region": sel(),  # 選択肢はアドミンが追加する
+        # スクールページのURL。notion_school_page_create.py が書き込む
+        "Schoolpage": URL,
     })
 
     user = create_db(notion, reg, "user", "User", {
@@ -180,6 +183,9 @@ def build_all(notion: Client, reg: Dict[str, str]) -> None:
         "Telegram User ID": NUM,
         "Telegram Username": TEXT,
         "Slack ID": TEXT,
+        # マイページのURL。notion_page_create.py が書き込む。
+        # バッチがブロックを書き換える先を知るために必要
+        "Mypage": URL,
     })
 
     # Subject を参照するのは Practice Example だけ（2026-10-02変更）

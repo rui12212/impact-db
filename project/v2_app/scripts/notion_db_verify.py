@@ -53,6 +53,7 @@ EXPECTED: Dict[str, Dict[str, Any]] = {
         "School ID": "unique_id",
         "Country": "select",
         "Region": "select",
+        "Schoolpage": "url",
     },
     "user": {
         "Teacher Name": "title",
@@ -61,6 +62,7 @@ EXPECTED: Dict[str, Dict[str, Any]] = {
         "Telegram User ID": "number",
         "Telegram Username": "rich_text",
         "Slack ID": "rich_text",
+        "Mypage": "url",
     },
     "subject": {
         "Name": "title",
