@@ -55,6 +55,23 @@ async def before_save(inc: Incoming, user: Dict[str, Any]) -> None:
     session.update_filled(ROUTE, inc.telegram_id, {"is_current": True})
 
 
+async def after_save(inc: Incoming, user: Dict[str, Any], page_id: str) -> None:
+    """保存した直後にマイページの見出しを最新にする。
+
+    先生が問いを登録して、すぐマイページを開いても反映されている状態にする。
+    夜のバッチ（batch/research_question.py）も同じ関数を呼ぶので、
+    ここが失敗しても翌朝には追いつく。
+    """
+    from v2_app.batch import research_question
+    from v2_app.core import page_layout as pl
+
+    mypage = pl.page_id_from_url(user.get("mypage") or "")
+    if not mypage:
+        # マイページがまだ作られていない先生。保存自体は成功している
+        return
+    await research_question.update_page(mypage, user["notion_page_id"])
+
+
 async def handle(inc: Incoming, user: Dict[str, Any]) -> None:
     await base.handle(
         inc,
@@ -63,4 +80,5 @@ async def handle(inc: Incoming, user: Dict[str, Any]) -> None:
         fields=FIELDS,
         db_id=DB_ID,
         before_save=before_save,
+        after_save=after_save,
     )

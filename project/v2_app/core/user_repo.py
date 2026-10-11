@@ -22,6 +22,10 @@ def _select(page: dict, prop: str) -> Optional[str]:
     sel = page.get("properties", {}).get(prop, {}).get("select")
     return sel.get("name") if sel else None
 
+
+def _url(page: dict, prop: str) -> str:
+    return page.get("properties", {}).get(prop, {}).get("url") or ""
+
 def _text(name: str) -> dict:
     return {"rich_text": [{"text": {"content": name}}]}
 
@@ -72,6 +76,9 @@ async def get_or_create_user(
         "notion_page_id": page["id"],
         "name": _title(page, "Teacher Name"),
         "role": _select(page, "Role") or DEFAULT_ROLE,
+        # バッチがマイページのブロックを書き換える先。
+        # notion_page_create.py が書き込む（まだ無ければ空）
+        "mypage": _url(page, "Mypage"),
         "school_id": "",
         "school_name": "",
     }

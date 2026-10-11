@@ -32,7 +32,7 @@ import sys
 import time
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
-from v2_app.batch import ai_summary, keywords, monthly_stats
+from v2_app.batch import ai_summary, keywords, monthly_stats, research_question
 from v2_app.core import page_layout as pl
 
 log = logging.getLogger("impactdb.v2")
@@ -130,13 +130,15 @@ async def _whole_job(name: str, run: Callable[[], Awaitable[Any]]) -> Result:
 
 # ------------------------------------------------------------------ ジョブ
 
-DAILY_JOBS = ("monthly_stats",)
+DAILY_JOBS = ("monthly_stats", "research_question")
 WEEKLY_JOBS = ("ai_summary", "keywords")
 
 
 async def _run_job(name: str) -> Result:
     if name == "monthly_stats":
         return await _whole_job(name, monthly_stats.run)
+    if name == "research_question":
+        return await _for_each_teacher(name, research_question.update_page)
     if name == "ai_summary":
         return await _for_each_teacher(name, ai_summary.update_page)
     if name == "keywords":
@@ -176,7 +178,7 @@ async def main() -> int:
     parser.add_argument("schedule", choices=("daily", "weekly", "all"))
     parser.add_argument(
         "--job",
-        help="このジョブだけ動かす（monthly_stats / ai_summary / keywords）",
+        help="monthly_stats / research_question / ai_summary / keywords",
     )
     args = parser.parse_args()
 

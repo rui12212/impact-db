@@ -146,6 +146,7 @@ async def handle(
     db_id: str,
     post_to_slack: bool = False,
     before_save: Optional[Callable] = None,
+    after_save: Optional[Callable] = None,
 ) -> None:
     """3モードが共有する会話ループ。
 
@@ -175,7 +176,9 @@ async def handle(
             return
     
     if inc.text == SAVE:
-        await _save(inc, user, route=route, fields=fields, db_id=db_id, post_to_slack=post_to_slack, before_save=before_save)
+        await _save(inc, user, route=route, fields=fields, db_id=db_id,
+                        post_to_slack=post_to_slack, before_save=before_save,
+                        after_save=after_save)
 
     if text:
         session.append_history(route, inc.telegram_id, "user", text)
@@ -235,6 +238,7 @@ async def _save(
     db_id: str,
     post_to_slack: bool,
     before_save: Optional[Callable] = None,
+    after_save: Optional[Callable] = None,
 ) -> None:
     """保存する。連打はここで止める。"""
     # ⚠️ Notionに触る前に鍵を取る。clear_session だけでは、
@@ -278,6 +282,16 @@ async def _save(
         filled = _filled(route, inc.telegram_id)
         page_id = await notion_writer.save(db_id, fields, filled)
         log.info("保存した route=%s page=%s", route, page_id)
+
+        # モード固有の後処理（探究テーマならマイページの見出しを直す）。
+        # ⚠️ ここより前に置くとNotionにまだページが無く、
+        # current_rq() が見つけられない。
+        # 失敗しても保存は成功しているので巻き戻さない
+        if after_save:
+            try:
+                await after_save(inc, user, page_id)
+            except Exception:
+                log.exception("after_save に失敗 route=%s", route)
 
         # 押したボタンを消す
         done = f"{t('saved')}\n\n{flow.render_confirmation(fields, filled)}"
