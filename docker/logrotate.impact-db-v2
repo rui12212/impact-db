@@ -1,0 +1,41 @@
+# Impact DB V2 のバッチログのローテーション
+#
+# 置き場所:
+#   sudo cp docker/logrotate.impact-db-v2 /etc/logrotate.d/impact-db-v2
+#   sudo chown root:root /etc/logrotate.d/impact-db-v2
+#   sudo chmod 644 /etc/logrotate.d/impact-db-v2
+#
+# ⚠️ デプロイ先に合わせてパスを書き換える（crontab.v2 と同じ場所）
+#
+# 確認（実際には回さずに動作を見る）:
+#   sudo logrotate -d /etc/logrotate.d/impact-db-v2
+#
+# ---- なぜ入れるか ----------------------------------------------------
+# 正常時のログは小さい。実測で daily 1回 約300バイト、
+# 30人になっても 1年で合計1MB程度。放っておいても困らない。
+#
+# 入れる理由は「障害時に膨らむから」。
+# log.exception はスタックトレースを数十行出すので、30人全員が失敗する
+# 状態（OpenAIの障害など）が続くと 1回1MB・1ヶ月30MB になる。
+# VPSのディスクが満杯になると Redis もログも書けず Bot が止まる。
+#
+# 加えて、週ごとに分かれていれば「先週の金曜に何があったか」を
+# batch-weekly.log.3.gz を見るだけで追える。
+
+/home/impact/impact-db/.runtime/logs/*.log {
+    weekly
+    rotate 8          # 2ヶ月分だけ残す。それより古いものは削除
+    compress
+    delaycompress     # 直近1世代は圧縮しない（すぐ読めるように）
+    missingok         # まだログが無くてもエラーにしない
+    notifempty        # 空なら何もしない
+
+    # ⚠️ copytruncate が必須。
+    # run-batch.sh はログを「開いたまま追記」している。
+    # ふつうのローテーション（名前を変えて新規作成）だと、
+    # 名前が変わった古いファイルに書き続けてしまい、
+    # 新しいファイルが空のまま古い方が増え続ける。
+    # copytruncate は中身をコピーしてから元のファイルを空にするので、
+    # ファイル自体が変わらず追記が続いても問題ない。
+    copytruncate
+}

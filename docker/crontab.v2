@@ -1,0 +1,46 @@
+# Impact DB V2 のバッチ
+#
+# 置き場所:
+#   sudo cp docker/crontab.v2 /etc/cron.d/impact-db-v2
+#   sudo chown root:root /etc/cron.d/impact-db-v2
+#   sudo chmod 644 /etc/cron.d/impact-db-v2
+#
+# ⚠️ デプロイ先に合わせて下の2行のパスを書き換える。
+#    変数（${REPO} など）を使わず絶対パスで書いてある。
+#    /etc/cron.d/ での変数展開はcronの実装に依存するので、
+#    無人で動くものに曖昧さを残さない。
+#
+# ⚠️ /etc/cron.d/ のファイルは「ユーザー名」の列が必要（crontab -e と違う）
+# ⚠️ ファイル名にドットを含めると cron が無視する（impact-db-v2.cron はダメ）
+# ⚠️ 最後は必ず改行で終わること。終わっていないと最後の行が無視される
+#
+# 確認:
+#   grep CRON /var/log/syslog | tail           # 実行されたか
+#   tail -f <repo>/.runtime/logs/batch-daily.log
+
+# ---- 時刻の前提 ------------------------------------------------------
+# CRON_TZ でカンボジア時間を明示する。VPSは日本（ConoHa）なのでホストは
+# JST だが、ホストの設定に依存させない。
+#
+#   カンボジア 02:00  =  UTC 19:00  =  JST 04:00（翌日）
+#   カンボジア 03:00  =  UTC 20:00  =  JST 05:00（翌日）
+#
+# ⚠️ CRON_TZ が効いているかは実機で確かめる。
+#    一度 "*/5 * * * *" で動かして、ログの時刻がカンボジア時間になるか見る。
+#    効いていなければ JST で書き直す（daily 4:00 / weekly 日曜 5:00）。
+CRON_TZ=Asia/Phnom_Penh
+
+# cron の PATH は /usr/bin:/bin だけ。run-batch.sh も docker を自力で探すが念のため
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# ---- 毎晩 02:00（カンボジア時間）------------------------------------
+# 件数の集計 + 今月の問いの反映。AIを使わない。30人で2〜3分
+0 2 * * *   root  /home/impact/impact-db/docker/run-batch.sh daily
+
+# ---- 毎週 日曜 03:00（カンボジア時間）--------------------------------
+# AIが書く文章（学びのサマリー・キーワード・着目点）。30人で約30分
+#
+# 日曜にするのは、月曜の朝に先生が開いた時に最新になっているため。
+# 学校週（月〜金）が終わってから回す。
+# → 間隔は先方と相談中（v2-todo.md A-12 / v2-batch-schedule.md）
+0 3 * * 0   root  /home/impact/impact-db/docker/run-batch.sh weekly

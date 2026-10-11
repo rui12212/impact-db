@@ -21,6 +21,7 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - PYTHONPATH=/app/project
+      - TZ=Asia/Phnom_Penh
       # compose内のサービス名で解決する（env_file の値を上書き）
       - REDIS_URL=redis://redis:6379/0
     volumes:
