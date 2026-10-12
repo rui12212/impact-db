@@ -60,10 +60,25 @@ async def detect_lang(file_path: str) -> str:
         return ""
 
 
-def main_text(km: str, en: str) -> str:
-    """抽出・分類に渡す本文を選ぶ。
+def teacher_text(km: str, en: str) -> str:
+    """**先生自身の言葉**を返す。クメール語を優先する。
 
-    extract.py と categorizer は英語で動かせる（英訳があるので）。
-    英訳が取れなかった時だけクメール語をそのまま渡す。
+    会話履歴・問いかけの生成・Notionの本文に使う。
+
+    ⚠️ ここで英訳を優先すると実害が2つ出る（2026-10-13に実機で発生）
+      1. history に英語が積まれ、ask.py が「この先生は英語で書いている」と
+         判断してクメール語の先生に英語で返す
+      2. Notion の Note に英訳が入る。先生自身の言葉が残らない
+    """
+    return km or en
+
+
+def analysis_text(km: str, en: str) -> str:
+    """**英訳**を返す。英訳が無ければクメール語。
+
+    コメントの8分類（core/categorize.py）に使う。V1の categorizer が
+    英語の例文を埋め込んでいるので、英語で渡さないと精度が落ちる。
+
+    抽出（extract.py）には使わない。Note に先生の言葉を残すため。
     """
     return en or km

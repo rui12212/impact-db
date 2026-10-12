@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 from typing import Any, Dict, List, Optional
@@ -164,11 +165,48 @@ async def answer_callback_query(
 
 
 async def send_chat_action(chat_id: int, action: str = "typing") -> None:
-    """「入力中…」を出す。LLMの応答に数秒かかるので無言の間を埋める。"""
+    """「入力中…」を出す。
+
+    ⚠️ Telegramの仕様で**5秒で消える。** 1回送っただけでは
+    長い処理（音声の文字起こしは50秒かかる）の間ずっと無反応に見える。
+    続けたいときは typing() を使う。
+    """
     try:
         await api("sendChatAction", chat_id=chat_id, action=action)
     except Exception as e:
         log.debug("sendChatAction failed: %s", e)
+
+
+# sendChatAction は5秒で切れるので、それより短い間隔で送り直す
+TYPING_INTERVAL = 4.0
+
+
+@contextlib.asynccontextmanager
+async def typing(chat_id: int, action: str = "typing"):
+    """処理が終わるまで「入力中…」を出し続ける。
+
+        async with telegram.typing(chat_id):
+            ...時間のかかる処理...
+
+    音声の文字起こしは50秒かかる。1回 sendChatAction を送るだけでは
+    最初の5秒しか表示されず、残り45秒は先生から見て無反応になる。
+    """
+    async def loop() -> None:
+        try:
+            while True:
+                await send_chat_action(chat_id, action)
+                await asyncio.sleep(TYPING_INTERVAL)
+        except asyncio.CancelledError:
+            pass
+
+    task = asyncio.create_task(loop())
+    try:
+        yield
+    finally:
+        task.cancel()
+        # 後片付けを待つ。待たないと「保留中のタスク」の警告が出る
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
 
 
 # --- ファイル ---------------------------------------------------------

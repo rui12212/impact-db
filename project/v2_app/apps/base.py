@@ -37,6 +37,16 @@ TEXTS: Dict[str, Dict[str, str]] = {
     "btn_more": {"en": "Add more", "km": "បន្ថែមទៀត"},
     "media_failed": {"en": "Could not read that file.", "km": "មិនអាចអានឯកសារនោះបានទេ។"},
     "confirm_head": {"en": "Is this correct?", "km": "តើនេះត្រឹមត្រូវទេ?"},
+    # 音声を受けた瞬間に出す。文字起こしに50秒かかるので、
+    # 何も出ないと先生から見て無反応になる
+    "listening": {
+        "en": "Listening to your recording...",
+        "km": "កំពុងស្តាប់ការថតសំឡេងរបស់អ្នក...",
+    },
+    "working": {
+        "en": "Reading what you sent...",
+        "km": "កំពុងអានអ្វីដែលអ្នកបានផ្ញើ...",
+    },
 }
 
 
@@ -54,6 +64,26 @@ def _btn(key: str) -> str:
 
 def _filled(route: str, telegram_id: int) -> Dict[str, Any]:
     return (session.get_session(route, telegram_id) or {}).get("filled", {})
+
+
+async def _reply(
+    inc: Incoming,
+    notice_id: Optional[int],
+    text: str,
+    *,
+    reply_markup: Optional[dict] = None,
+) -> None:
+    """返信する。先に出した「聞いています…」があればそれを書き換える。
+
+    書き換えることでメッセージが増えない。50秒待たせたあとに
+    「聞いています…」が残っていると会話が読みにくい。
+    """
+    if notice_id:
+        await telegram.edit_message_text(
+            inc.chat_id, notice_id, text, reply_markup=reply_markup
+        )
+        return
+    await telegram.send_message(inc.chat_id, text, reply_markup=reply_markup)
 
 
 def _fill_if_present(
@@ -80,8 +110,12 @@ def _media_key(fields: List[flow.Field], kind: str) -> Optional[str]:
 async def _store_media(inc: Incoming, fields: List[flow.Field], route: str) -> str:
     """メディアをR2に上げる。音声なら文字起こしして本文を返す。
 
-    返すのは「本文として扱うテキスト」。音声なら文字起こし、
+    返すのは「本文として扱うテキスト」。音声なら**クメール語の文字起こし**、
     それ以外は caption（無ければ空）。
+
+    ⚠️ 英訳を返してはいけない。history に英語が積まれ、ask.py が
+    クメール語の先生に英語で返すようになる（2026-10-13に実機で発生）。
+    英訳は translated_en に入れてあり、分類がそこを見る。
     """
     url = await telegram.get_file_url(inc.file_id)
 
@@ -134,7 +168,7 @@ async def _store_media(inc: Incoming, fields: List[flow.Field], route: str) -> s
     _fill_if_present(
         route, inc.telegram_id, fields, {"stt_km": km, "translated_en": en}
     )
-    return stt.main_text(km, en)
+    return stt.teacher_text(km, en)
 
 
 async def handle(
@@ -168,62 +202,77 @@ async def handle(
         return
 
     # --- メディア / テキスト ---
+    #
+    # ⚠️ 音声の文字起こしは50秒かかる。何も出さないと先生から見て
+    # 無反応になるので、受けた瞬間に一言返して、そのメッセージを
+    # 最後に問いかけで書き換える（メッセージを増やさない）
+    notice_id: Optional[int] = None
     text = inc.text
+
     if inc.has_media:
-        await telegram.send_chat_action(inc.chat_id)
-        text = await _store_media(inc, fields, route)
-        if not text and inc.kind == "voice":
+        notice_id = await telegram.send_message(
+            inc.chat_id, t("listening") if inc.kind == "voice" else t("working")
+        )
+
+    async with telegram.typing(inc.chat_id):
+        if inc.has_media:
+            text = await _store_media(inc, fields, route)
+            if not text and inc.kind == "voice":
+                return
+
+        if text:
+            session.append_history(route, inc.telegram_id, "user", text)
+            try:
+                values = await extract.extract_values(
+                    fields, session.get_history(route, inc.telegram_id), text
+                )
+                session.update_filled(route, inc.telegram_id, values)
+            except Exception:
+                log.exception("抽出に失敗 route=%s", route)
+
+        filled = _filled(route, inc.telegram_id)
+
+        # --- 次の問いかけ ---
+        ask_count = (session.get_session(route, inc.telegram_id) or {}).get(
+            "ask_count", 0
+        )
+        question = await ask.make_question(
+            fields, filled, session.get_history(route, inc.telegram_id), ask_count
+        )
+
+        # ⚠️ make_question の None は「掘り下げを使い切った」と
+        # 「LLMが落ちた」の両方で返る。区別できないので充足を確かめる。
+        # 未充足なら schema.py の固定の質問に落とす（proposal §4-6）
+        if not question and not flow.is_complete(fields, filled):
+            question = flow.next_question(fields, filled)
+            if question:
+                session.append_history(
+                    route, inc.telegram_id, "assistant", question
+                )
+                await _reply(inc, notice_id, question)
+                return
+
+        if question:
+            session.bump_ask_count(route, inc.telegram_id)
+            session.append_history(route, inc.telegram_id, "assistant", question)
+            await _reply(inc, notice_id, question)
             return
-    
-    if inc.text == SAVE:
-        await _save(inc, user, route=route, fields=fields, db_id=db_id,
-                        post_to_slack=post_to_slack, before_save=before_save,
-                        after_save=after_save)
 
-    if text:
-        session.append_history(route, inc.telegram_id, "user", text)
-        await telegram.send_chat_action(inc.chat_id)
-        try:
-            values = await extract.extract_values(
-                fields, session.get_history(route, inc.telegram_id), text
-            )
-            session.update_filled(route, inc.telegram_id, values)
-        except Exception:
-            log.exception("抽出に失敗 route=%s", route)
-
-    filled = _filled(route, inc.telegram_id)
-
-    # --- 次の問いかけ ---
-    ask_count = (session.get_session(route, inc.telegram_id) or {}).get("ask_count", 0)
-    question = await ask.make_question(
-        fields, filled, session.get_history(route, inc.telegram_id), ask_count
-    )
-    if question:
-        session.bump_ask_count(route, inc.telegram_id)
-        session.append_history(route, inc.telegram_id, "assistant", question)
-        await telegram.send_message(inc.chat_id, question)
-        return
-
-    # ⚠️ make_question の None は「掘り下げを使い切った」と
-    # 「LLMが落ちた」の両方で返る。区別できないので充足を確かめる。
-    # 未充足なら schema.py の固定の質問に落とす（proposal §4-6）
-    if not flow.is_complete(fields, filled):
-        fallback = flow.next_question(fields, filled)
-        if fallback:
-            session.append_history(route, inc.telegram_id, "assistant", fallback)
-            await telegram.send_message(inc.chat_id, fallback)
-            return
-
-    await _confirm(inc, route, fields, filled)
+    await _confirm(inc, route, fields, filled, notice_id)
 
 
 async def _confirm(
-    inc: Incoming, route: str, fields: List[flow.Field], filled: Dict[str, Any]
+    inc: Incoming,
+    route: str,
+    fields: List[flow.Field],
+    filled: Dict[str, Any],
+    notice_id: Optional[int] = None,
 ) -> None:
     body = flow.render_confirmation(fields, filled)
     rows = [[(_btn("btn_save"), SAVE), (_btn("btn_more"), MORE)]]
-    await telegram.send_message(
-        inc.chat_id,
+    await _reply(
+        inc,
+        notice_id,
         f"{t('confirm_head')}\n\n{body}",
         reply_markup=telegram.inline_keyboard(rows),
     )
