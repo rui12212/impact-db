@@ -145,6 +145,23 @@ async def edit_message_text(
         log.warning("editMessageText failed: %s", e)
 
 
+async def delete_message(chat_id: int, message_id: int) -> None:
+    """送ったメッセージを消す。
+
+    「Thinking...」を消して本物の返信を送るのに使う。
+
+    ⚠️ 書き換え（editMessageText）ではなく削除にしている理由:
+    編集では**通知が飛ばない。** 音声の文字起こしに50秒かかる間に
+    先生がアプリを離れていると、編集では返信に気づけない。
+    消して送り直せば通知が鳴る。
+    """
+    try:
+        await api("deleteMessage", chat_id=chat_id, message_id=message_id)
+    except Exception as e:
+        # 既に消えている・古すぎる（48時間）場合は失敗する。害はない
+        log.debug("deleteMessage failed: %s", e)
+
+
 async def answer_callback_query(
     callback_query_id: str, text: str = "", *, show_alert: bool = False
 ) -> None:

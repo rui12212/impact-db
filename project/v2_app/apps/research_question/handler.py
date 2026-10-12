@@ -81,4 +81,7 @@ async def handle(inc: Incoming, user: Dict[str, Any]) -> None:
         db_id=DB_ID,
         before_save=before_save,
         after_save=after_save,
+        # 設定するだけなのでLLMを使わない（2026-10-13）。
+        # 打った文がそのまま問いになる。抽出も深掘りもしない
+        use_llm=False,
     )

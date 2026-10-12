@@ -26,6 +26,9 @@ def _user_key(telegram_id:int) -> str:
 def _pending_key(app: str, telegram_id: int) -> str:
     return f"{app}:pending:{telegram_id}"
 
+def _notice_key(app: str, telegram_id: int) -> str:
+    return f"{app}:notice:{telegram_id}"
+
 # route
 def get_route(telegram_id: int) -> Optional[str]:
     return get_redis().get(_route_key(telegram_id))
@@ -86,6 +89,7 @@ def clear_session(app: str, telegram_id:int) -> None:
         _session_key(app, telegram_id),
         _history_key(app, telegram_id),
         _pending_key(app, telegram_id),
+        _notice_key(app, telegram_id),
         _route_key(telegram_id),
     )
 
@@ -116,6 +120,22 @@ def set_pending(app: str, telegram_id: int, value: str) -> None:
         get_redis().delete(key)
         return
     get_redis().set(key, value, ex=TTL)
+
+# notice: 出している「Thinking...」の message_id を覚えておく。
+# 写真を複数枚送るとTelegramが1枚ずつ別メッセージで送ってくるので、
+# 覚えておかないと Thinking が枚数分出る
+NOTICE_TTL = 600
+
+def get_notice(app: str, telegram_id: int) -> Optional[int]:
+    """いま出している Thinking の message_id。無ければ None。"""
+    raw = get_redis().get(_notice_key(app, telegram_id))
+    return int(raw) if raw else None
+
+def set_notice(app: str, telegram_id: int, message_id: int) -> None:
+    get_redis().set(_notice_key(app, telegram_id), str(message_id), ex=NOTICE_TTL)
+
+def clear_notice(app: str, telegram_id: int) -> None:
+    get_redis().delete(_notice_key(app, telegram_id))
 
 # history
 def append_history(app: str, telegram_id:int, role:str, content: str) -> None:

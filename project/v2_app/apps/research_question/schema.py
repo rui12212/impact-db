@@ -20,6 +20,7 @@ FIELDS: List[Dict[str, Any]] = [
         "key": "rq",
         "label": "Research Question",
         "question": "What question do you want to explore in your teaching?",
+        "question_km": "តើអ្នកចង់ស្វែងយល់សំណួរអ្វីក្នុងការបង្រៀនរបស់អ្នក?",
         "source": "ask",
         "required": True,
         "notion_prop": "RQ",

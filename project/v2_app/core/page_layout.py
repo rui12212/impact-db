@@ -44,6 +44,43 @@ KM = {
     H_PRACTICE: "ឧទាហរណ៍នៃការអនុវត្ត",
 }
 
+# ------------------------------------------------- スクールページの見出し
+#
+# マイページと同じ契約。heading_1 が区切り、照合は英語の先頭一致。
+# ⚠️ マイページと名前が被らないように S_ を付ける。片方の見出しを
+#    変えた時に、もう片方のバッチが別のブロックを掴まないようにするため
+S_NUMBERS = "This month in numbers"
+S_CHANGE = "How this school is changing"
+S_RESEARCH = "Research questions in this school"
+S_WORDS = "Words that keep coming back"
+S_COMMENTS = "Lesson study comments over time"
+S_TEACHERS = "Teachers"
+S_PRACTICE = "Practice examples"
+S_RECORDING = "Recording status"
+
+KM_SCHOOL = {
+    S_NUMBERS: "ខែនេះជាតួលេខ",
+    S_CHANGE: "របៀបដែលសាលានេះកំពុងផ្លាស់ប្តូរ",
+    S_RESEARCH: "សំណួរស្រាវជ្រាវនៅក្នុងសាលានេះ",
+    S_WORDS: "ពាក្យដែលកើតឡើងដដែលៗ",
+    S_COMMENTS: "មតិយោបល់លើការសិក្សាបទបង្រៀនតាមពេលវេលា",
+    S_TEACHERS: "គ្រូបង្រៀន",
+    S_PRACTICE: "ឧទាហរណ៍នៃការអនុវត្ត",
+    S_RECORDING: "ស្ថានភាពនៃការកត់ត្រា",
+}
+
+# batch/school_summary.py が書き換えるセクション
+MANAGED_SCHOOL = {
+    S_NUMBERS: "paragraph",   # 記録があった先生の割合（チャートでは割れない）
+    S_CHANGE: "callout",      # AIの文章（英語・クメール語の2つ）
+    S_WORDS: "paragraph",     # キーワードの行
+    S_COMMENTS: "callout",    # AIの考察（英語・クメール語の2つ）
+}
+
+# スクールページ側の小見出し
+S_SCHOOL_ASKED = "What the school has been asking"
+S_SESSIONS_LIST = "The sessions"
+
 SEP = "  ·  "
 
 # バッチが書き換えるセクション。見出し → そのあと何を探すか
@@ -60,8 +97,12 @@ PLACEHOLDER_KM = "កំពុងរៀបចំ។"
 
 
 def label(english: str) -> str:
-    """画面に出す見出し。英語とクメール語を1行に並べる。"""
-    km = KM.get(english, "")
+    """画面に出す見出し。英語とクメール語を1行に並べる。
+
+    マイページとスクールページの両方の辞書を見る。
+    どちらに入れても label() で引けるようにするため。
+    """
+    km = KM.get(english) or KM_SCHOOL.get(english, "")
     return f"{english}{SEP}{km}" if km else english
 
 
@@ -149,6 +190,26 @@ def find_all_after(
 
     return found
 
+
+
+def find_header(blocks: List[Dict[str, Any]]) -> List[str]:
+    """ページ先頭のヘッダー段落の id を順に返す。
+
+    マイページの先頭は「先生の名前」「学校名」の段落で、
+    **最初の heading_1 より前**にある。見出しが上に無いので
+    find_after では見つけられない。
+
+    位置で決めている（最初の heading_1 より前の paragraph）。
+    build() が先頭に名前→学校名の順で置くという前提に依存する。
+    """
+    out: List[str] = []
+    for block in blocks:
+        kind = block.get("type", "")
+        if kind == "heading_1":
+            return out
+        if kind == "paragraph":
+            out.append(block["id"])
+    return out
 
 
 def find_heading(blocks: List[Dict[str, Any]], english: str) -> Optional[str]:

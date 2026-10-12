@@ -133,6 +133,11 @@ async def handle_update(update: Dict[str, Any]) -> None:
     if inc.is_callback and inc.callback_id:
         await telegram.answer_callback_query(inc.callback_id)
 
+    log.info(
+        "[1] 受信 kind=%s text=%r callback=%s media=%s",
+        inc.kind, (inc.text or "")[:50], inc.is_callback, inc.has_media,
+    )
+
     # Telegram が教えてくる言語を初回だけ控えておく
     if inc.lang_code and not session.get_lang(inc.telegram_id):
         session.set_lang(inc.telegram_id, inc.lang_code[:2])
@@ -147,18 +152,24 @@ async def handle_update(update: Dict[str, Any]) -> None:
 
     # コマンドは route より優先する。どこで詰まっても抜け出せるように
     if inc.kind == "text" and inc.text.startswith("/"):
+        log.info("[2] コマンド -> handle_command")
         await menu.handle_command(inc, user)
         return
 
     # 学校が決まっていない先生は、まず所属を選んでもらう
     if not user.get("school_id"):
+        log.info("[2] 所属なし -> onboard")
         await menu.onboard(inc, user)
         return
 
     route = session.get_route(inc.telegram_id)
+    log.info("[3] route=%s", route)
     if not route:
+        log.info("[4] route なし -> menu.show")
         await menu.show(inc, user)
         return
+
+    log.info("[4] route あり -> %s の handler", route)
 
     handler = registry.get_handler(route)
     if handler is None:

@@ -1,13 +1,20 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List, Optional
 
 from v2_app.core import flow
 from v2_app.core.config import MODEL_ASK, MODEL_EXTRACT
 from v2_app.core.llm import complete_json, complete_text
 
+log = logging.getLogger("impactdb.v2")
+
 # 抽出するキーワードの上限
 MAX_KEYWORDS = 5
+
+# 1語の上限。クメール語は単語間に空白が無いので、空白の有無だけでは
+# 句を弾けない。文字数で歯止めをかける
+MAX_KEYWORD_CHARS = 30
 
 
 SYSTEM_SUMMARY = """You write a very short heading for a teacher's reflection.
@@ -19,14 +26,45 @@ Rules:
 - Output ONLY the heading. No quotes, no explanation.
 """
 
-SYSTEM_KEYWORDS = """You pick the words a teacher focused on in their reflection.
+# ⚠️ キーワードは**先生が使った単語をそのまま抜く**（2026-10-13決定）。
+# LLMに解釈させない。選ぶ基準だけを与える。
+#
+# 基準は「**先生の着眼点**」= 授業中に先生が何を見ていたか。
+#
+# 失敗した3つの方向:
+#   ① 「名詞句を取れ」だけ → 文を切り刻むだけ
+#      ['half of the students', 'denominators', 'drawing diagrams']
+#   ② 「学びを名付けろ」   → LLMが作った言葉。先生は言っていない
+#      ['procedural misconception', 'teacher pacing']
+#   ③ 言い回しのまま抜く   → 記録ごとに違う語になり、ほぼ全部1件になる
+#      ['went back to the diagram', 'a good textbook']
+#
+# **頻度は追わない**（2026-10-13決定）。どういう語が出てくるかを見るためのもの。
+# ただし単語1つに絞ることで、結果として繰り返しも出やすくなる。
+SYSTEM_KEYWORDS = """You extract keywords from a teacher's reflection on their
+own lesson.
+
+**Every keyword must be a SINGLE WORD copied from the reflection, character
+for character.** You are selecting, not writing.
+
+What to select: the words that show WHERE THE TEACHER WAS LOOKING during the
+lesson. What were they paying attention to?
 
 Rules:
-- Use the teacher's OWN words. Do NOT translate. Do NOT paraphrase into formal terms.
-- Pick nouns or short noun phrases that show WHERE the teacher's attention was.
-- Pick at most 5. Fewer is fine. If nothing stands out, return an empty list.
-- Do NOT include the subject name (Math, Khmer) or the grade.
+- ONE word each. Never a phrase. Copy it exactly as it appears in the text.
+- Pick 5. If the reflection does not contain 5 worth picking, pick fewer.
+- Do NOT rephrase, translate, inflect, or join words.
+- Skip names of people, numbers, subject names, and grades.
+- Skip function words (the, and, is, very, really, today, learned).
+- Negative is fine. A struggle or a missed chance is also something they saw.
+
+Example:
+  Reflection: "Today, I learned that for better focus, they need to put their
+  tables together. Even though it's four members of group, doesn't matter.
+  The textbook is really important."
+  Keywords: ["focus", "tables", "group", "textbook"]
 """
+
 
 SYSTEM_SLACK = """You summarize a teacher's reflection for a team channel.
 
@@ -98,15 +136,33 @@ async def make_keywords(
         return []
     
     words = result.get("keywords") or []
-    seen, out = set(),[]
+    # ⚠️ プロンプトだけに頼らず、コード側でも落とす。
+    # LLMは「単語1つでそのまま抜け」と言っても、言い換えるし句で返す。
+    #   1. 本文に文字列として無い      → 先生が言っていない語
+    #   2. 空白を含む                  → 句になっている
+    #   3. 長すぎる                    → クメール語は単語間に空白が無いので
+    #                                     空白だけでは句を弾けない
+    haystack = text.lower()
+    seen, out, dropped = set(), [], []
     for w in words:
-        w=str(w).strip()
-        if not w or w in seen:
+        w = str(w).strip().strip('"\u201c\u201d').strip(".,;:!?()[]")
+        if not w or w.lower() in seen:
             continue
-        seen.add(w)
+        if any(c.isspace() for c in w):
+            dropped.append((w, "phrase"))
+            continue
+        if len(w) > MAX_KEYWORD_CHARS:
+            dropped.append((w, "too_long"))
+            continue
+        if w.lower() not in haystack:
+            dropped.append((w, "not_in_text"))
+            continue
+        seen.add(w.lower())
         out.append(w)
-        if len(out) >=MAX_KEYWORDS:
+        if len(out) >= MAX_KEYWORDS:
             break
+    if dropped:
+        log.info("捨てたキーワード: %s", dropped)
     return out
 
 async def make_slack_text(
@@ -114,8 +170,14 @@ async def make_slack_text(
     fields: List[flow.Field],
     filled: Dict[str, Any],
     *,
+    head: str = "",
     model: Optional[str]=None
 ) -> Optional[str]:
+  """Slackに流す1通。先生の名前 + 要約。
+
+  head を渡すと1行目を差し替えられる。授業研究で
+  「どの会へのコメントか」を出すため（2026-10-13）。
+  """
   body = _main_text(fields, filled)
   if not body:
     return None
@@ -134,7 +196,7 @@ async def make_slack_text(
   if not summary:
     return None
   
-  return f"{teacher_name} has put the record!\n{summary}"
+  return f"{head or f'{teacher_name} has put the record!'}\n{summary}"
 
 def _main_text(fields: List[flow.Field], filled:Dict[str,Any]) -> str:
     for f in flow.asked_fields(fields):

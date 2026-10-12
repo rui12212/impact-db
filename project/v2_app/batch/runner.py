@@ -32,7 +32,13 @@ import sys
 import time
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
-from v2_app.batch import ai_summary, keywords, monthly_stats, research_question
+from v2_app.batch import (
+    ai_summary,
+    keywords,
+    monthly_stats,
+    research_question,
+    school_summary,
+)
 from v2_app.core import page_layout as pl
 
 log = logging.getLogger("impactdb.v2")
@@ -128,21 +134,110 @@ async def _whole_job(name: str, run: Callable[[], Awaitable[Any]]) -> Result:
     return result
 
 
+async def _for_each_school(name: str, job: PageJob) -> Result:
+    """学校ごとに処理する。1校の失敗で止めない。
+
+    スクールページがまだ無い学校はスキップする
+    （school_page ジョブが先に作る）。
+    """
+    from v2_app.scripts.notion_school_page_create import schools
+
+    result = Result(name)
+    start = time.monotonic()
+
+    try:
+        rows = await schools()
+    except Exception as e:
+        result.error = str(e)[:120]
+        result.seconds = time.monotonic() - start
+        log.exception("%s: 学校の一覧を取れなかった", name)
+        return result
+
+    for school in rows:
+        page_id = pl.page_id_from_url(school["schoolpage"])
+        if not page_id:
+            result.skipped += 1
+            log.info("%s: スクールページが無い %s", name, school["name"])
+            continue
+
+        try:
+            wrote = await job(page_id, school["school_id"])
+        except Exception:
+            result.failed += 1
+            log.exception("%s: 失敗 %s", name, school["name"])
+            continue
+
+        if wrote:
+            result.ok += 1
+        else:
+            result.skipped += 1
+
+    result.seconds = time.monotonic() - start
+    return result
+
+
+async def _create_missing_mypages() -> Dict[str, int]:
+    """マイページが無い先生の分を作る。
+
+    所属を選んだ直後に Bot が作る（router/menu.py）が、
+      ① その場で失敗した場合
+      ② アドミンがNotionで直接 School Member を作った先生
+    を夜に拾う。
+
+    notion_page_create.run は冪等（Mypage があればスキップ）なので
+    毎晩回しても既存のページには触らない。
+    """
+    # TODO: teachers() と同じ理由でスクリプトから借りている
+    from v2_app.scripts.notion_page_create import run as create_pages
+
+    out = await create_pages(False, None)
+    return {
+        "created": out.get("created", 0),
+        "updated": 0,
+        "failed": 1 if out.get("error") else 0,
+    }
+
+
+async def _create_missing_schoolpages() -> Dict[str, int]:
+    """スクールページが無い学校の分を作る。
+
+    マイページと違い **Bot が作る経路が無い**（先生は学校ページを
+    使わない）。アドミンがNotionで学校を足したら夜に拾う。
+
+    冪等（Schoolpage があればスキップ）。
+    """
+    from v2_app.scripts.notion_school_page_create import run as create_pages
+
+    out = await create_pages(False, None)
+    return {"created": out.get("created", 0), "updated": 0, "failed": 0}
+
+
 # ------------------------------------------------------------------ ジョブ
 
-DAILY_JOBS = ("monthly_stats", "research_question")
-WEEKLY_JOBS = ("ai_summary", "keywords")
+# ⚠️ mypage は research_question より前。ページが無いと
+# 問いの見出しを書き換える先が無い
+DAILY_JOBS = ("monthly_stats", "mypage", "school_page", "research_question")
+
+# ⚠️ school_summary は school_page より後。ページが無いと書く先が無い。
+# 週1にする理由はマイページと同じ（文章が毎日揺れると信頼を失う）
+WEEKLY_JOBS = ("ai_summary", "keywords", "school_summary")
 
 
 async def _run_job(name: str) -> Result:
     if name == "monthly_stats":
         return await _whole_job(name, monthly_stats.run)
+    if name == "mypage":
+        return await _whole_job(name, _create_missing_mypages)
     if name == "research_question":
         return await _for_each_teacher(name, research_question.update_page)
     if name == "ai_summary":
         return await _for_each_teacher(name, ai_summary.update_page)
     if name == "keywords":
         return await _for_each_teacher(name, keywords.update_page)
+    if name == "school_page":
+        return await _whole_job(name, _create_missing_schoolpages)
+    if name == "school_summary":
+        return await _for_each_school(name, school_summary.update_page)
     raise ValueError(f"未知のジョブ: {name}")
 
 
@@ -178,7 +273,10 @@ async def main() -> int:
     parser.add_argument("schedule", choices=("daily", "weekly", "all"))
     parser.add_argument(
         "--job",
-        help="monthly_stats / research_question / ai_summary / keywords",
+        help=(
+            "monthly_stats / mypage / school_page / research_question / "
+            "ai_summary / keywords / school_summary"
+        ),
     )
     args = parser.parse_args()
 

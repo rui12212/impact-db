@@ -93,6 +93,18 @@ def to_notion_props(fields: List[Field], filled: Dict[str, Any]) -> Dict[str, An
 
 
 # 確認カード
+# 確認カードで1項目に出す上限。
+#
+# ⚠️ もとは120文字で切っていたが、**確認カードは保存前に中身を見る
+# 唯一の場所**なので切る理由が無い（2026-10-13変更）。
+# 探究テーマは全文が見えないと設定できないし、音声の文字起こしは
+# ここでしか先生が内容を確かめられない。
+#
+# Telegramの1メッセージは4096文字で、telegram._split が分割するので
+# 長くても壊れない。それでも暴走を防ぐために上限は置く
+CONFIRM_MAX_CHARS = 1500
+
+
 def render_confirmation(fields: List[Field], filled: Dict[str, Any]) -> str:
     lines = []
     for f in asked_fields(fields):
@@ -101,7 +113,7 @@ def render_confirmation(fields: List[Field], filled: Dict[str, Any]) -> str:
             continue
         label = f.get("label") or f["key"]
         text = str(v)
-        if len(text) > 120:
-            text = text[:120] + "…"
+        if len(text) > CONFIRM_MAX_CHARS:
+            text = text[:CONFIRM_MAX_CHARS] + "…"
         lines.append(f"{label}: {text}")
     return "\n".join(lines) if lines else "（まだ何も記録されていません）"

@@ -75,3 +75,67 @@ def _() -> None:
 def _() -> None:
     missing = [k for k, v in menu.TEXTS.items() if not v.get("en")]
     assert not missing, f"en が空: {missing}"
+
+
+@suite.case("非表示のモードは MODES に含まれている（消していない）")
+def _() -> None:
+    menu_keys = {key for key, _, _ in menu.MODES}
+    assert menu.HIDDEN_MODES <= menu_keys, (
+        f"MODES に無いものを隠そうとしている: {menu.HIDDEN_MODES - menu_keys}"
+    )
+
+
+@suite.case("visible_modes は非表示を除いたものを返す")
+def _() -> None:
+    visible = {key for key, _, _ in menu.visible_modes()}
+    expected = {key for key, _, _ in menu.MODES} - menu.HIDDEN_MODES
+    assert visible == expected, visible
+
+
+@suite.case("base.handle は保存時に before_save / after_save を渡している")
+def _() -> None:
+    """渡し忘れるとモード固有の処理が全部動かない（2026-10-13に発生）。
+
+      探究テーマ  Is Current が立たず、マイページも更新されない
+      実践例      Subject の照合と Materials のタグが付かない
+      授業研究    8分類（Category）が入らない
+
+    どれも**エラーにならず静かに起きる**ので、テストで止める。
+    """
+    import ast
+    import inspect
+
+    from v2_app.apps import base
+
+    tree = ast.parse(inspect.getsource(base.handle))
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_save"
+    ]
+    assert calls, "handle が _save を呼んでいない"
+    for call in calls:
+        names = {kw.arg for kw in call.keywords}
+        for required in ("before_save", "after_save"):
+            assert required in names, f"_save に {required} を渡していない"
+
+
+@suite.case("モード固有の処理を持つモードは base にフックを渡している")
+def _() -> None:
+    import inspect
+
+    expected = {
+        # route → 必要なフック
+        "research_question": ("before_save", "after_save"),
+        "practice": ("before_save",),
+        "lesson_study": ("before_save",),
+    }
+    for route, hooks in expected.items():
+        entry = registry.ROUTES.get(route)
+        if not entry or not entry["ready"]:
+            continue
+        src = inspect.getsource(inspect.getmodule(entry["handler"]))
+        for hook in hooks:
+            assert f"{hook}=" in src, f"{route} が {hook} を渡していない"

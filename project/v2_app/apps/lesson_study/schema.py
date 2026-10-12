@@ -20,6 +20,7 @@ FIELDS: List[Dict[str, Any]] = [
         "key": "comment",
         "label": "Comment",
         "question": "What did you notice in the lesson?",
+        "question_km": "តើអ្នកបានកត់សម្គាល់អ្វីក្នុងមេរៀន?",
         "source": "ask",
         "required": True,
         "notion_prop": "Comment",

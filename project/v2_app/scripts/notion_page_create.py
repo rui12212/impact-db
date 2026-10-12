@@ -45,7 +45,6 @@ import httpx
 from v2_app.core import page_layout as pl
 from v2_app.core.config import (
     DB_DAILY_LEARNING,
-    DB_LESSON_STUDY,
     DB_LESSON_STUDY_REFLECTION,
     DB_PRACTICE_EXAMPLE,
     DB_RESEARCH_QUESTION,
@@ -208,6 +207,29 @@ async def prop_ids(c: httpx.AsyncClient, ds_id: str) -> Dict[str, str]:
     return {k: v["id"] for k, v in res.json()["properties"].items()}
 
 
+def gallery_card(props: Dict[str, str], *show: str) -> dict:
+    """ギャラリーのカードに出すプロパティを決める configuration。
+
+    タイトルの下に日付などを並べられる。1枚のカードを見れば
+    「何を・いつ」が分かる（2026-10-13 ユーザー要望）。
+
+    ⚠️ **書かなかったプロパティは visible:false になる。**
+    配列は全置き換えなので、タイトル（property_id は "title"）も
+    毎回明示しないとカードの見出しが消える。
+
+    ⚠️ キーは `properties`。`visible_properties` や `card_properties`
+    でも **200が返るが黙って無視される**（2026-10-13に実測）。
+    """
+    items = [{"property_id": "title", "visible": True}]
+    for name in show:
+        pid = props.get(name)
+        if pid:
+            items.append({"property_id": pid, "visible": True})
+        else:
+            log.warning("カードに出せない（プロパティが無い）: %s", name)
+    return {"type": "gallery", "properties": items}
+
+
 async def make_view(
     c: httpx.AsyncClient,
     page_id: str,
@@ -352,9 +374,9 @@ async def build(page_id: str, teacher: Dict[str, Any], school_name: str) -> None
     async with httpx.AsyncClient(timeout=60, headers=_headers()) as c:
         ds_daily = await data_source_id(c, DB_DAILY_LEARNING)
         ds_lsr = await data_source_id(c, DB_LESSON_STUDY_REFLECTION)
-        ds_box = await data_source_id(c, DB_LESSON_STUDY)
         ds_practice = await data_source_id(c, DB_PRACTICE_EXAMPLE)
         p_lsr = await prop_ids(c, ds_lsr)
+        p_daily = await prop_ids(c, ds_daily)
 
         # --- ヘッダー ---
         header = [para(rt(teacher["name"], bold=True))]
@@ -406,6 +428,7 @@ async def build(page_id: str, teacher: Dict[str, Any], school_name: str) -> None
         await append(page_id, [divider(), h1(pl.label(pl.H_TIMELINE))])
         await make_view(
             c, page_id, ds_daily, "Timeline", "gallery",
+            configuration=gallery_card(p_daily, "Date"),
             filter_=mine,
             sorts=[{"property": "Date", "direction": "descending"}],
             fallback="list",
@@ -434,15 +457,14 @@ async def build(page_id: str, teacher: Dict[str, Any], school_name: str) -> None
             filter_=mine,
         )
 
+        # ⚠️ ここは授業研究の「箱」ではなく**自分のリフレクション。**
+        # 箱（学校単位の会そのもの）を出していたが、先生が見たいのは
+        # 自分が書いたコメントの方（2026-10-13 ユーザー判断）
         await append(page_id, [h2(pl.label(pl.H_SESSIONS))])
-        school_filter = (
-            {"property": "School", "relation": {"contains": teacher["school_id"]}}
-            if teacher["school_id"]
-            else None
-        )
         await make_view(
-            c, page_id, ds_box, "Sessions", "gallery",
-            filter_=school_filter,
+            c, page_id, ds_lsr, "My lesson study reflections", "gallery",
+            configuration=gallery_card(p_lsr, "Date"),
+            filter_=mine,
             sorts=[{"property": "Date", "direction": "descending"}],
         )
 
@@ -492,6 +514,104 @@ async def school_names() -> Dict[str, str]:
     from v2_app.core.config import DB_SCHOOL
 
     return {p["id"]: _title(p, "School Name") for p in await paginate(DB_SCHOOL)}
+
+
+async def ensure_by_user_id(user_id: str) -> Optional[str]:
+    """その先生のマイページが無ければ作る。あれば何もしない。
+
+    返すのは URL（作った / 既にあった）。作れなければ None。
+
+    **所属を選んだ直後に Bot から呼ばれる**（router/menu.py）。
+    先生が登録した時点でマイページが存在しないと、見に行く場所が無い。
+
+    冪等。既に Mypage が入っていればNotionに1回も書かない。
+    """
+    root = os.getenv("NOTION_V2_MYPAGE_ROOT_ID")
+    if not root:
+        log.warning("NOTION_V2_MYPAGE_ROOT_ID が未設定。マイページを作れない")
+        return None
+
+    rows = [t for t in await teachers() if t["user_id"] == user_id]
+    if not rows:
+        log.info("在籍中の School Member が無い user=%s", user_id)
+        return None
+
+    teacher = rows[0]
+    if teacher["mypage"]:
+        return teacher["mypage"]
+
+    schools = await school_names()
+    notion = get_notion()
+    page = await notion.pages.create(
+        parent={"type": "page_id", "page_id": root},
+        icon={"type": "emoji", "emoji": "🌱"},
+        properties={"title": {"title": [{"text": {"content": teacher["name"]}}]}},
+    )
+    await build(page["id"], teacher, schools.get(teacher["school_id"], ""))
+    await update_page(user_id, {"Mypage": {"url": page["url"]}})
+    log.info("マイページを作った %s %s", teacher["name"], page["url"])
+    return page["url"]
+
+
+async def refresh_header(user_id: str) -> bool:
+    """マイページ先頭の「名前」「学校名」とページタイトルを最新にする。
+
+    **設定モードで名前や学校を変えた直後に裏で呼ばれる**
+    （router/menu.py ではなく apps/settings/handler.py）。
+
+    ⚠️ ヘッダーはブロックとして書いてあるので、Notionのリレーションの
+    ように自動で追従しない。名前を直しても `--rebuild` するまで
+    古いままだった（2026-10-13に発覚）。
+
+    変わっていなければ何も書かない。
+    """
+    rows = [t for t in await teachers() if t["user_id"] == user_id]
+    if not rows:
+        return False
+
+    teacher = rows[0]
+    page_id = pl.page_id_from_url(teacher["mypage"])
+    if not page_id:
+        return False
+
+    schools = await school_names()
+    school = schools.get(teacher["school_id"], "")
+
+    notion = get_notion()
+    res = await notion.blocks.children.list(block_id=page_id, page_size=100)
+    header = pl.find_header(res.get("results", []))
+
+    if not header:
+        log.warning("ヘッダーの段落が見つからない page=%s", page_id)
+        return False
+
+    await notion.blocks.update(
+        block_id=header[0],
+        paragraph={"rich_text": [rt(teacher["name"], bold=True)]},
+    )
+
+    if len(header) > 1:
+        await notion.blocks.update(
+            block_id=header[1],
+            paragraph={"rich_text": [rt(school, color="gray")]},
+        )
+    elif school:
+        # 所属を選ばずに作られたページ。学校名の段落がまだ無い。
+        # after を付けて名前のすぐ下に入れる（末尾に付くと最下部に落ちる）
+        await notion.blocks.children.append(
+            block_id=page_id,
+            children=[para(rt(school, color="gray"))],
+            after=header[0],
+        )
+
+    # ページのタイトルも先生の名前。Notionのサイドバーとリンクに出る
+    await notion.pages.update(
+        page_id=page_id,
+        properties={"title": {"title": [{"text": {"content": teacher["name"]}}]}},
+    )
+
+    log.info("マイページのヘッダーを更新 %s / %s", teacher["name"], school)
+    return True
 
 
 async def run(rebuild: bool, only: Optional[int]) -> Dict[str, int]:

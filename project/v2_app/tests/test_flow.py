@@ -148,11 +148,22 @@ def _() -> None:
     assert text == "Reflection: fractions", repr(text)
 
 
-@suite.case("render_confirmation は120文字で省略する")
+@suite.case("render_confirmation は長文もそのまま出す（200文字は切らない）")
 def _() -> None:
-    text = flow.render_confirmation(DAILY_FIELDS, {"note": "あ" * 200})
+    # 確認カードは保存前に中身を見る唯一の場所。切らない
+    note = "あ" * 200
+    text = flow.render_confirmation(DAILY_FIELDS, {"note": note})
+    assert note in text
+    assert not text.endswith("…")
+
+
+@suite.case("render_confirmation は上限を超えたら省略する")
+def _() -> None:
+    text = flow.render_confirmation(
+        DAILY_FIELDS, {"note": "あ" * (flow.CONFIRM_MAX_CHARS + 100)}
+    )
     assert text.endswith("…")
-    assert len(text) == len("Reflection: ") + 121
+    assert len(text) == len("Reflection: ") + flow.CONFIRM_MAX_CHARS + 1
 
 
 @suite.case("render_confirmation: 何も無ければ案内文")

@@ -17,7 +17,8 @@ FIELDS: List[Dict[str, Any]] = [
     {
         "key": "note",
         "label": "Reflection",
-        "question": "How was your lesson today?",
+        "question": "What kind of learnings did you have?",
+        "question_km": "តើអ្នកមានការរៀនសូត្រអ្វីខ្លះ?",
         "source": "ask",
         "required": True,
         "notion_prop": "Note",
@@ -27,6 +28,7 @@ FIELDS: List[Dict[str, Any]] = [
         "key": "subject",
         "label": "Subject",
         "question": "Which subject was it?",
+        "question_km": "តើវាជាមុខវិជ្ជាអ្វី?",
         "source": "ask",
         "required": False,
         "notion_prop": "Subject",

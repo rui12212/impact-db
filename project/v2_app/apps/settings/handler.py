@@ -6,13 +6,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Set
 
 from v2_app.core import session, telegram, user_repo
 from v2_app.router.dispatcher import Incoming
 
 log = logging.getLogger("impactdb.v2")
+
+# 投げっぱなしのタスクの置き場。参照を持たないとGCに回収される
+_background: Set[asyncio.Task] = set()
 
 ROUTE = "settings"
 DB_ID = ""
@@ -38,6 +42,14 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "km": "មិនទាន់មានសាលាណាមួយត្រូវបានចុះឈ្មោះទេ។ សូមទាក់ទងបុគ្គលិក។",
     },
     "current": {"en": "Now:", "km": "បច្ចុប្បន្ន៖"},
+    "done": {
+        "en": "Saved successfully.",
+        "km": "បានរក្សាទុកដោយជោគជ័យ។",
+    },
+    "same_school": {
+        "en": "That is already your school.",
+        "km": "នោះជាសាលារបស់អ្នករួចហើយ។",
+    },
 }
 
 
@@ -51,6 +63,37 @@ def _btn(key: str) -> str:
     pair = TEXTS.get(key, {})
     en, km = pair.get("en", ""), pair.get("km", "")
     return f"{en} / {km}" if km else en
+
+
+def _refresh_mypage(user: Dict[str, Any]) -> None:
+    """マイページ先頭の名前・学校名を裏で直す。
+
+    **先生を待たせない。** Notionの書き換えは3〜4往復かかるので、
+    Telegramには先に「保存しました」を返し、ここは投げっぱなしにする。
+
+    夜間バッチを待たずに即時で反映するため（2026-10-13 ユーザー要望）。
+    """
+    page_id = user.get("notion_page_id")
+    if not page_id:
+        return
+
+    async def job() -> None:
+        from v2_app.scripts import notion_page_create
+
+        await notion_page_create.refresh_header(page_id)
+
+    task = asyncio.create_task(job())
+    _background.add(task)
+    task.add_done_callback(_background.discard)
+    task.add_done_callback(_log_failure)
+
+
+def _log_failure(task: asyncio.Task) -> None:
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc:
+        log.warning("マイページのヘッダー更新に失敗: %s", exc)
 
 
 async def _show_menu(inc: Incoming, user: Dict[str, Any]) -> None:
@@ -81,8 +124,6 @@ async def _show_schools(inc: Incoming, user: Dict[str, Any]) -> None:
 
 
 async def handle(inc: Incoming, user: Dict[str, Any]) -> None:
-    from v2_app.router import menu
-
     if session.get_session(ROUTE, inc.telegram_id) is None:
         session.new_session(ROUTE, inc.telegram_id, [])
 
@@ -102,18 +143,26 @@ async def handle(inc: Incoming, user: Dict[str, Any]) -> None:
 
         if data.startswith(PICK_SCHOOL):
             page_id = data[len(PICK_SCHOOL) :]
+            before = user.get("school_id", "")
             updated = await user_repo.set_school(inc.telegram_id, page_id)
             if inc.message_id:
                 await telegram.edit_message_text(
                     inc.chat_id, inc.message_id, updated.get("school_name") or ""
                 )
-            await telegram.send_message(inc.chat_id, t("school_saved"))
+            # set_school は同じ学校なら何もせず返す。「変えました」と出さない
+            changed = updated.get("school_id", "") != before
+            await telegram.send_message(
+                inc.chat_id, t("school_saved") if changed else t("same_school")
+            )
+            if changed:
+                _refresh_mypage(updated)
             await _show_menu(inc, updated)
             return
 
         if data == MENU_DONE:
             session.clear_session(ROUTE, inc.telegram_id)
-            await menu.show(inc, user)
+            # モード選択は出さない。設定を閉じたら終わり（2026-10-13 ユーザー要望）
+            await telegram.send_message(inc.chat_id, t("done"))
             return
 
         return
@@ -127,6 +176,7 @@ async def handle(inc: Incoming, user: Dict[str, Any]) -> None:
         updated = await user_repo.rename(inc.telegram_id, inc.text.strip())
         session.set_pending(ROUTE, inc.telegram_id, "")
         await telegram.send_message(inc.chat_id, t("name_saved"))
+        _refresh_mypage(updated)
         await _show_menu(inc, updated)
         return
 

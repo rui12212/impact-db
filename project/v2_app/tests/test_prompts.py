@@ -49,9 +49,13 @@ def _() -> None:
     assert "image" not in text
 
 
-@suite.case("追い質問の上限は 2 回（案C）")
+@suite.case("追い質問は固定文を1回だけ（2026-10-13変更）")
 def _() -> None:
-    assert ask.MAX_FOLLOWUP == 2
+    # もとはLLMに掘り下げさせていたが、実機でくどかった。
+    # 「他にありますか」を1回だけ固定文で聞く
+    assert ask.MAX_FOLLOWUP == 1
+    assert ask.FOLLOWUP_EN
+    assert ask.FOLLOWUP_KM
 
 
 @suite.case("履歴の上限とキーワード数の定数がある")

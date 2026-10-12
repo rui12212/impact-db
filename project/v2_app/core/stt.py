@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import logging
 from typing import Any, Dict, Optional, Tuple
 
@@ -23,6 +24,63 @@ def pick_audio(msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return pick_audio_from_message(msg)
 
 
+# V1の transcribe_gemini_km が付けてくるタイムスタンプ。
+# 30秒ごとに分割して "[00:00.000-00:30.000] 本文" の形で連結している
+_TIMESTAMP = re.compile(r"\[\s*\d{1,2}:\d{2}(?:[.:]\d+)?\s*-\s*\d{1,2}:\d{2}(?:[.:]\d+)?\s*\]")
+
+# LLMが本文の前に付ける前置き。コロンで終わり、文字起こしや言語に
+# 言及している部分を落とす。
+#   "The audio content is in English, not Khmer. Here is the verbatim
+#    transcription in English:"
+_PREAMBLE_WORDS = (
+    "transcription", "transcript", "audio", "language",
+    "khmer", "english", "verbatim", "here is", "note",
+)
+
+# 前置きを探す範囲。本文の途中のコロンを誤って切らないため
+_PREAMBLE_LIMIT = 300
+
+
+def _strip_preamble(text: str) -> str:
+    """LLMが付けた前置きを落とす。
+
+    最初のコロンまでを見て、文字起こしや言語について語っていれば捨てる。
+    本文中のコロン（"9:30 に始めた" など）を誤って切らないよう、
+    範囲を頭 _PREAMBLE_LIMIT 文字に限り、キーワードで判定する。
+    """
+    head = text[:_PREAMBLE_LIMIT]
+    for sep in (":", "："):
+        idx = head.rfind(sep)
+        if idx < 0:
+            continue
+        candidate = head[:idx].lower()
+        if any(w in candidate for w in _PREAMBLE_WORDS):
+            return text[idx + 1 :].lstrip()
+    return text
+
+
+def clean_transcript(text: str) -> str:
+    """文字起こしから、本文以外を落とす。
+
+    ⚠️ V1の経路をそのまま使っているので、本文に2種類のノイズが混ざる
+    （2026-10-13に実機で発覚）。V1のコードはV1本番と共用なので触らず、
+    V2側で落とす。
+
+      1. タイムスタンプ  "[00:00-00:08] ..."
+      2. LLMの前置き     "The audio content is in English, not Khmer.
+                          Here is the verbatim transcription in English:"
+
+    → 根本の解決は T-1（STTの検証）で前処理とチャンク化を見直す時
+    """
+    if not text:
+        return ""
+    text = _TIMESTAMP.sub(" ", text)
+    text = _strip_preamble(text)
+    # 空行と行頭行末の空白を整える
+    lines = [ln.strip() for ln in text.splitlines()]
+    return "\n".join(ln for ln in lines if ln).strip()
+
+
 async def transcribe(file_path: str) -> Tuple[str, str]:
     """音声ファイル → (クメール語の文字起こし, 英訳)。
 
@@ -43,7 +101,7 @@ async def transcribe(file_path: str) -> Tuple[str, str]:
         log.warning("transcribe failed: %s", e)
         return "", ""
 
-    return (km or "").strip(), (en or "").strip()
+    return clean_transcript(km), clean_transcript(en)
 
 
 async def detect_lang(file_path: str) -> str:
