@@ -84,8 +84,35 @@ except json.JSONDecodeError:
     SLACK_CHANNEL_MAP = {}
 
 
-# 起動時に必ず揃っていてほしいもの
+# 起動時に必ず揃っていてほしいもの。
+#
+# ⚠️ **ここに無いものは、落ちずに静かに動かなくなる。** _get() は空文字を
+#    返すだけなので、Telegramのトークンが空でもBotは起動し、返信だけが
+#    届かない。本番で原因を追うのが難しいものをここに入れる。
+#
+# ここに入れないもの:
+#   Slack              未設定でも「投稿しない」で正しく動く
+#   マイページのルート  未設定なら警告を出してスキップする
+#   モデル名           既定値がある
 REQUIRED = (
+    # --- Telegram。無いと受信も返信もできない ---
+    "V2_TELEGRAM_BOT_TOKEN",
+    "V2_TELEGRAM_SECRET_TOKEN",
+
+    # --- LLM。無いと抽出・分類・要約が全部落ちる ---
+    "OPENAI_API_KEY",
+
+    # --- 文字起こし。無いと音声が無言で失敗する ---
+    "GEMINI_API_KEY",
+
+    # --- R2。無いと写真と音声の保存が落ちる ---
+    "R2_ACCOUNT_ID",
+    "R2_ACCESS_KEY_ID",
+    "R2_SECRET_ACCESS_KEY",
+    "R2_BUCKET_NAME",
+    "R2_PUBLIC_URL_BASE",
+
+    # --- Notion ---
     "NOTION_V2_API_KEY",
     "NOTION_V2_SCHOOL_DB_ID",
     "NOTION_V2_USER_DB_ID",

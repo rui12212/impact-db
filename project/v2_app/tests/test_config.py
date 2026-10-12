@@ -13,10 +13,36 @@ def _() -> None:
     assert config.SESSION_TTL_SECONDS == 60 * 60 * 24 * 3
 
 
-@suite.case("REQUIRED は Notion の APIキー + DB 10個")
+@suite.case("REQUIRED に重複が無い")
 def _() -> None:
-    assert len(config.REQUIRED) == 11, config.REQUIRED
-    assert len(set(config.REQUIRED)) == 11
+    assert len(set(config.REQUIRED)) == len(config.REQUIRED), config.REQUIRED
+
+
+@suite.case("REQUIRED に「無いと静かに壊れるもの」が入っている")
+def _() -> None:
+    """⚠️ _get() は空文字を返すだけなので、**落ちずに動かなくなる。**
+    Telegramのトークンが空でもBotは起動し、返信だけが届かない。
+
+    Slackとマイページのルートは入れない（未設定でも正しく動く）。
+    """
+    need = {
+        "V2_TELEGRAM_BOT_TOKEN",
+        "V2_TELEGRAM_SECRET_TOKEN",
+        "OPENAI_API_KEY",
+        "GEMINI_API_KEY",
+        "R2_ACCOUNT_ID",
+        "R2_BUCKET_NAME",
+        "R2_PUBLIC_URL_BASE",
+        "NOTION_V2_API_KEY",
+    }
+    missing = need - set(config.REQUIRED)
+    assert not missing, f"REQUIRED に入れ忘れ: {sorted(missing)}"
+
+
+@suite.case("REQUIRED に Notion の DB ID が10個入っている")
+def _() -> None:
+    dbs = [n for n in config.REQUIRED if n.endswith("_DB_ID")]
+    assert len(dbs) == 10, dbs
 
 
 @suite.case("必須の環境変数が全部入っている")
