@@ -22,13 +22,27 @@
 # 加えて、週ごとに分かれていれば「先週の金曜に何があったか」を
 # batch-weekly.log.3.gz を見るだけで追える。
 
+# ⚠️ **行末にコメントを書けない。** `rotate 8  # 説明` は
+#    bad rotation count で弾かれ、**設定ブロック全体が無視される**
+#    （2026-10-13 本番で発覚。`Handling 0 logs` になる）。
+#    コメントは必ず行頭に置く。
+
 /home/impact/impact-db/.runtime/logs/*.log {
     weekly
-    rotate 8          # 2ヶ月分だけ残す。それより古いものは削除
+
+    # 2ヶ月分だけ残す。それより古いものは削除
+    rotate 8
+
     compress
-    delaycompress     # 直近1世代は圧縮しない（すぐ読めるように）
-    missingok         # まだログが無くてもエラーにしない
-    notifempty        # 空なら何もしない
+
+    # 直近1世代は圧縮しない（すぐ読めるように）
+    delaycompress
+
+    # まだログが無くてもエラーにしない
+    missingok
+
+    # 空なら何もしない
+    notifempty
 
     # ⚠️ copytruncate が必須。
     # run-batch.sh はログを「開いたまま追記」している。
