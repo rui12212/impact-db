@@ -33,6 +33,12 @@ CRON_TZ=Asia/Phnom_Penh
 # cron の PATH は /usr/bin:/bin だけ。run-batch.sh も docker を自力で探すが念のため
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
+# ⚠️ **本番の compose ファイルを明示する。**
+# run-batch.sh の既定は v2.local.yml なので、これが無いと
+# 「コンテナ app が動いていない」で毎晩失敗する（ログにだけ出るので
+# 気づかないまま数週間過ぎる）
+IMPACT_COMPOSE_FILE=/home/impact/impact-db/docker/v2.prod.yml
+
 # ---- 毎晩 02:00（カンボジア時間）------------------------------------
 # 件数の集計 + 今月の問いの反映。AIを使わない。30人で2〜3分
 0 2 * * *   root  /home/impact/impact-db/docker/run-batch.sh daily
