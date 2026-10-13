@@ -34,6 +34,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from v2_app.batch import (
     ai_summary,
+    keyword_cleanup,
     keywords,
     monthly_stats,
     research_question,
@@ -216,7 +217,15 @@ async def _create_missing_schoolpages() -> Dict[str, int]:
 
 # ⚠️ mypage は research_question より前。ページが無いと
 # 問いの見出しを書き換える先が無い
-DAILY_JOBS = ("monthly_stats", "mypage", "school_page", "research_question")
+# ⚠️ keyword_cleanup は最後。マイページとスクールページが Keywords を
+# 読んで書き換えるので、その後に掃除する
+DAILY_JOBS = (
+    "monthly_stats",
+    "mypage",
+    "school_page",
+    "research_question",
+    "keyword_cleanup",
+)
 
 # ⚠️ school_summary は school_page より後。ページが無いと書く先が無い。
 # 週1にする理由はマイページと同じ（文章が毎日揺れると信頼を失う）
@@ -238,6 +247,8 @@ async def _run_job(name: str) -> Result:
         return await _whole_job(name, _create_missing_schoolpages)
     if name == "school_summary":
         return await _for_each_school(name, school_summary.update_page)
+    if name == "keyword_cleanup":
+        return await _whole_job(name, keyword_cleanup.run)
     raise ValueError(f"未知のジョブ: {name}")
 
 
@@ -275,7 +286,7 @@ async def main() -> int:
         "--job",
         help=(
             "monthly_stats / mypage / school_page / research_question / "
-            "ai_summary / keywords / school_summary"
+            "keyword_cleanup / ai_summary / keywords / school_summary"
         ),
     )
     args = parser.parse_args()

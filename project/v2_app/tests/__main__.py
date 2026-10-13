@@ -12,6 +12,7 @@ import sys
 
 from v2_app.tests import (
     test_base,
+    test_batch,
     test_config,
     test_flow,
     test_media,
@@ -26,6 +27,7 @@ from v2_app.tests.harness import report
 
 SUITES = [
     test_base.suite,
+    test_batch.suite,
     test_config.suite,
     test_flow.suite,
     test_media.suite,
