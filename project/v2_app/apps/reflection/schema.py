@@ -17,8 +17,9 @@ FIELDS: List[Dict[str, Any]] = [
     {
         "key": "note",
         "label": "Reflection",
-        "question": "What kind of learnings did you have?",
-        "question_km": "តើអ្នកមានការរៀនសូត្រអ្វីខ្លះ?",
+        "question": "What is your learning today?",
+        # 仮訳（開発側）。先方への確認は A-9 の便で
+        "question_km": "តើថ្ងៃនេះអ្នកបានរៀនអ្វី?",
         "source": "ask",
         "required": True,
         "notion_prop": "Note",

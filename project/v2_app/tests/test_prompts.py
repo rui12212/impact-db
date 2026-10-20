@@ -111,3 +111,77 @@ def _() -> None:
                 bad.append(f"{mod.__name__}: {node.value[:40]!r}")
 
     assert not bad, "プロンプトに日本語:\n  " + "\n  ".join(bad)
+
+
+# ---------------------------------------------- pick_subject（LLMは差し替える）
+
+def _with_subject(value, calls=None):
+    """complete_json を差し替えて pick_subject を動かす。
+
+    LLMが返した値だけを変えて、後ろの判定を確かめる。
+    """
+    import asyncio
+
+    async def fake(*args, **kwargs):
+        if calls is not None:
+            calls.append(kwargs.get("schema_name"))
+        if isinstance(value, Exception):
+            raise value
+        return {"subject": value}
+
+    real = summarize.complete_json
+    summarize.complete_json = fake
+    try:
+        return asyncio.run(summarize.pick_subject("today I taught fractions"))
+    finally:
+        summarize.complete_json = real
+
+
+@suite.case("教科はそのまま返す（言い換えない）")
+def _() -> None:
+    assert _with_subject("Math") == "Math"
+
+
+@suite.case("クメール語のまま返す")
+def _() -> None:
+    assert _with_subject("គណិតវិទ្យា") == "គណិតវិទ្យា"
+
+
+@suite.case("null 相当は捨てる（Notionに書かない）")
+def _() -> None:
+    """⚠️ 「Not detected」などを返すと、その文字列が Subject に入る。"""
+    for value in (None, "null", "N/A", "none", "Not detected", "  "):
+        assert _with_subject(value) == "", value
+
+
+@suite.case("長すぎるものは教科名ではないので捨てる")
+def _() -> None:
+    long = "The subject was mathematics and we also did some reading together"
+    assert len(long) > summarize.MAX_SUBJECT_CHARS
+    assert _with_subject(long) == ""
+
+
+@suite.case("LLMが落ちても空を返す（保存を止めない）")
+def _() -> None:
+    assert _with_subject(RuntimeError("boom")) == ""
+
+
+@suite.case("本文が空ならLLMを呼ばない")
+def _() -> None:
+    """写真だけの記録で無駄に1回呼ばないため。"""
+    import asyncio
+
+    called = []
+
+    async def fake(*args, **kwargs):
+        called.append(1)
+        return {"subject": "Math"}
+
+    real = summarize.complete_json
+    summarize.complete_json = fake
+    try:
+        assert asyncio.run(summarize.pick_subject("   ")) == ""
+    finally:
+        summarize.complete_json = real
+
+    assert not called, "空の本文でLLMを呼んでいる"

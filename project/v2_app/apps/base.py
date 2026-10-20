@@ -186,6 +186,28 @@ VERBATIM_MAX = 150
 ELLIPSIS = "…"
 
 
+# 足していくときの区切り。Notionでも段落として見える
+SEP_NOTE = "\n\n"
+
+
+def _appended(before: Any, text: str) -> str:
+    """同じ項目に発話を足していく。
+
+    ⚠️ **上書きしない。** 上書きだと Add more を繰り返したときに
+    最後の発話だけが残り、先生が話した内容が消える
+    （2026-10-17 先方から指摘）。
+
+    1回目はそのまま。2回目以降は空行を挟んで繋ぐ。
+    """
+    head = str(before or "").strip()
+    tail = (text or "").strip()
+    if not head:
+        return tail
+    if not tail:
+        return head
+    return f"{head}{SEP_NOTE}{tail}"
+
+
 def _clip(text: str, filled: Dict[str, Any]) -> str:
     """長い文を VERBATIM_MAX で切って「…」を付ける。
 
@@ -345,6 +367,7 @@ async def handle(
     after_save: Optional[Callable] = None,
     use_llm: bool = True,
     followup: bool = True,
+    accumulate: str = "",
 ) -> None:
     """3モードが共有する会話ループ。
 
@@ -426,13 +449,22 @@ async def handle(
                 # ⚠️ 設定するだけのモード（探究テーマ）はLLMを使わない。
                 # 打った文がそのまま答えなので、抽出するものが無い。
                 # 1回のLLM呼び出しで5〜10秒待たせる理由が無い
+
                 current = _filled(route, inc.telegram_id)
-                field = flow.next_field(fields, filled=current)
-                if field is not None:
+
+                if accumulate:
                     session.update_filled(
-                        route, inc.telegram_id,
-                        {field["key"]: _clip(text, current)},
+                        route,
+                        inc.telegram_id,
+                        {accumulate: _appended(current.get(accumulate), text)},
                     )
+                else:
+                    field = flow.next_field(fields, filled=current)
+                    if field is not None:
+                      session.update_filled(
+                          route, inc.telegram_id,
+                          {field["key"]: _clip(text, current)},
+                      )
             else:
                 try:
                     values = await extract.extract_values(
@@ -444,6 +476,7 @@ async def handle(
 
         filled = _filled(route, inc.telegram_id)
 
+
         # --- 次の問いかけ ---
         ask_count = (session.get_session(route, inc.telegram_id) or {}).get(
             "ask_count", 0
@@ -451,7 +484,7 @@ async def handle(
         # ⚠️ followup=False は「LLMの深掘りをしない」モード（授業研究）。
         # schema.py の固定の質問は下のフォールバックで出るので、
         # 未充足のまま確認カードに飛ぶことはない
-        skip_ask = not use_llm or not followup
+        skip_ask = not followup
         question = None if skip_ask else await ask.make_question(
             fields,
             filled,

@@ -19,8 +19,9 @@ FIELDS: List[Dict[str, Any]] = [
     {
         "key": "comment",
         "label": "Comment",
-        "question": "What did you notice in the lesson?",
-        "question_km": "តើអ្នកបានកត់សម្គាល់អ្វីក្នុងមេរៀន?",
+        "question": "What did you learn through the learning of students today?",
+        # 仮訳（開発側）。先方への確認は A-9 の便で
+        "question_km": "តើថ្ងៃនេះអ្នកបានរៀនអ្វីពីការរៀនសូត្ររបស់សិស្ស?",
         "source": "ask",
         "required": True,
         "notion_prop": "Comment",

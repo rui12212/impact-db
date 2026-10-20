@@ -53,12 +53,38 @@ if not ENV_FILE.exists():
         "NOTION_V2_API_KEY と NOTION_V2_ROOT_PAGE_ID を書いた env/v2.local.env を作成してください。"
     )
 
-load_dotenv(ENV_FILE)
+# ⚠️ **override=True が必須。**
+#
+# コンテナは env_file で環境変数を注入済み（docker/v2.local.yml）。
+# override しないと**注入済みの値が勝ち**、V2_ENV_FILE で開発用を
+# 指定しても **本番のルートページにDBが作られる**（2026-10-21に発覚）。
+#
+# このスクリプトは「指定された env ファイルだけを信じる」。
+#
+# ⚠️ このスクリプトが読むのは API キーとルートページIDの**2つだけ。**
+#    DB ID は読まない（出力するだけ）。呼ぶのも databases.create だけで、
+#    既存のDBを更新・削除する経路が無い。
+load_dotenv(ENV_FILE, override=True)
 
 NOTION_V2_API_KEY = os.getenv("NOTION_V2_API_KEY")
 ROOT_PAGE_ID = os.getenv("NOTION_V2_ROOT_PAGE_ID")
 
-REGISTRY_PATH = REPO_ROOT / ".runtime" / "v2_db_registry.json"
+# ⚠️ **レジストリは環境ごとに分ける。**
+#
+# 固定パスにすると、開発用のNotionに作り直そうとした時に
+# 「本番の10DBが既に作成済み」と判定されて**1つも作られない**
+# （2026-10-20に発覚）。
+#
+#   env/v2.local.env → .runtime/v2_db_registry.local.json
+#   env/v2.dev.env   → .runtime/v2_db_registry.dev.json
+#   env/v2.prod.env  → .runtime/v2_db_registry.prod.json
+#
+# 既存の .runtime/v2_db_registry.json（本番の記録）はそのまま残す
+_ENV_TAG = ENV_FILE.stem.replace("v2.", "").replace(".env", "") or "local"
+REGISTRY_PATH = REPO_ROOT / ".runtime" / f"v2_db_registry.{_ENV_TAG}.json"
+
+# 以前の固定パス。新しい名前が無ければこちらを読む（本番の記録を拾う）
+_LEGACY_REGISTRY = REPO_ROOT / ".runtime" / "v2_db_registry.json"
 RATE_LIMIT_SLEEP = 0.4  # Notion API は 3 req/秒
 
 
@@ -66,6 +92,10 @@ RATE_LIMIT_SLEEP = 0.4  # Notion API は 3 req/秒
 def load_registry() -> Dict[str, str]:
     if REGISTRY_PATH.exists():
         return json.loads(REGISTRY_PATH.read_text(encoding="utf-8"))
+    # 名前を分ける前に作ったもの。local のときだけ引き継ぐ
+    if _ENV_TAG == "local" and _LEGACY_REGISTRY.exists():
+        print(f"  （古い {_LEGACY_REGISTRY.name} を引き継ぎます）")
+        return json.loads(_LEGACY_REGISTRY.read_text(encoding="utf-8"))
     return {}
 
 
@@ -368,6 +398,63 @@ def print_manual_steps() -> None:
 
 
 # ---------------------------------------------------------------- main
+def confirm_target(notion: Client, reg: Dict[str, str]) -> bool:
+    """どこに作るのかを**名前で**見せて、確認を取る。
+
+    ⚠️ IDの文字列は見比べても間違いに気づけない。**ページのタイトルを
+    取得して出す。** 「V2-DEV-ROOT-PAGE」と出れば本番ではないと目で分かる。
+
+    ⚠️ もう1つ、**この環境のレジストリが空なのに env に DB ID が入って
+    いる**場合は、別の環境の値が混ざっている疑いがあるので止める。
+    """
+    try:
+        page = notion.pages.retrieve(page_id=ROOT_PAGE_ID)
+        title_items = page.get("properties", {}).get("title", {}).get("title", [])
+        title = "".join(t.get("plain_text", "") for t in title_items) or "(無題)"
+    except Exception as e:
+        print(f"ルートページを読めません: {e}")
+        print("  → ページ右上「…」→ 接続 → V2用インテグレーションを追加")
+        return False
+
+    filled = {
+        name: os.getenv(name, "")
+        for name in ENV_NAMES.values()
+        if os.getenv(name, "").strip()
+    }
+
+    print()
+    print("=" * 56)
+    print(f"  env ファイル : {ENV_FILE}")
+    print(f"  ルートページ : {title}")
+    print(f"                 {ROOT_PAGE_ID}")
+    print(f"  レジストリ   : {REGISTRY_PATH.name}"
+          f"{'' if REGISTRY_PATH.exists() else ' （新規）'}")
+    print(f"  作成済み     : {len(reg)} / {len(ENV_NAMES)}")
+    print(f"  env の DB ID : {len(filled)} / {len(ENV_NAMES)} 個が設定済み")
+    print("=" * 56)
+
+    # 別の環境の値が混ざっている疑い
+    if filled and not reg:
+        print()
+        print("⚠️ この env には既に DB ID が入っていますが、この環境の")
+        print("   レジストリは空です。**別の環境の値が混ざっている**")
+        print("   可能性があります。")
+        for name, value in list(filled.items())[:3]:
+            print(f"     {name} = ...{value[-6:]}")
+        print()
+        print("   開発用の env を作るときは DB ID を空にしてください。")
+        return False
+
+    todo = len(ENV_NAMES) - len(reg)
+    if todo == 0:
+        print("\n作るものはありません（全部作成済み）")
+        return True
+
+    print(f"\nここに {todo} 個のDBを作ります。")
+    answer = input("続けますか [y/N]: ").strip().lower()
+    return answer == "y"
+
+
 def main() -> None:
     if not NOTION_V2_API_KEY:
         sys.exit("NOTION_V2_API_KEY が設定されていません（.env を確認してください）")
@@ -377,9 +464,8 @@ def main() -> None:
     notion = Client(auth=NOTION_V2_API_KEY)
     reg = load_registry()
 
-    print(f"環境ファイル: {ENV_FILE}")
-    print(f"ルートページ: {ROOT_PAGE_ID}")
-    print(f"registry    : {REGISTRY_PATH}")
+    if not confirm_target(notion, reg):
+        sys.exit("中止しました")
 
     try:
         build_all(notion, reg)

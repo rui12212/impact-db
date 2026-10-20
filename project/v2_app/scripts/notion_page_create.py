@@ -507,7 +507,6 @@ async def init_root() -> int:
     print("  docker compose -f docker/v2.local.yml up -d --force-recreate app")
     return 0
 
-
 # --------------------------------------------------------------------- main
 
 async def school_names() -> Dict[str, str]:

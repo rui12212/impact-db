@@ -26,6 +26,30 @@ Rules:
 - Output ONLY the heading. No quotes, no explanation.
 """
 
+SYSTEM_SUBJECT = """You read a teacher's reflection and name the school
+subject it is about.
+
+Rules:
+- Answer with the subject only. No sentence, no explanation.
+- **Answer in the teacher's own language**, using their own word for it.
+  If they wrote in Khmer, answer in Khmer.
+- If the teacher did not say which subject, answer null.
+- Do NOT guess from the activity. "group work" is not a subject.
+"""
+
+SUBJECT_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {"subject": {"type": ["string", "null"]}},
+    "required": ["subject"],
+    "additionalProperties": False,
+}
+
+# これより長いものは教科名ではない（文で返ってきている）
+MAX_SUBJECT_CHARS = 40
+
+# 「言っていない」をLLMが文字列で返してくることがある
+NOT_A_SUBJECT = ("null", "none", "n/a", "na", "unknown", "not detected", "-")
+
 # ⚠️ キーワードは**先生が使った単語をそのまま抜く**（2026-10-13決定）。
 # LLMに解釈させない。選ぶ基準だけを与える。
 #
@@ -208,3 +232,43 @@ def _main_text(fields: List[flow.Field], filled:Dict[str,Any]) -> str:
     ]
 
     return "\n".join(parts)
+
+
+async def pick_subject(text: str, *, model: Optional[str] = None) -> str:
+    """Daily Reflection用。足していった Note から教科を1つ抜く。
+
+    対話中は聞かず、保存の直前に1回だけ判定する（2026-10-19決定）。
+
+    ⚠️ **推測させない。** 言っていなければ空を返す。活動の内容から
+    教科を当てさせると、先生が言っていないものが入る（キーワード抽出で
+    同じ失敗をした → SYSTEM_KEYWORDS のコメント）。
+
+    ⚠️ **先生の言葉のまま返す。** クメール語ならクメール語。
+    マイページとスクールページのカードに出るため。
+
+    返りは常に文字列。入れるものが無ければ ""（Notionには書かない）。
+    """
+    if not text.strip():
+        return ""
+
+    try:
+        result = await complete_json(
+            SYSTEM_SUBJECT,
+            text,
+            SUBJECT_SCHEMA,
+            schema_name="subject",
+            model=model or MODEL_EXTRACT,
+        )
+    except Exception:
+        log.exception("教科の抽出に失敗")
+        return ""
+
+    subject = (result.get("subject") or "").strip()
+
+    if subject.lower() in NOT_A_SUBJECT:
+        return ""
+    if len(subject) > MAX_SUBJECT_CHARS:
+        log.info("教科が長すぎるので捨てる: %r", subject[:60])
+        return ""
+
+    return subject

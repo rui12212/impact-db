@@ -19,8 +19,9 @@ FIELDS: List[Dict[str, Any]] = [
     {
         "key": "rq",
         "label": "Research Question",
-        "question": "What question do you want to explore in your teaching?",
-        "question_km": "តើអ្នកចង់ស្វែងយល់សំណួរអ្វីក្នុងការបង្រៀនរបស់អ្នក?",
+        "question": "What do you want to explore in this month?",
+        # 仮訳（開発側）。先方への確認は A-9 の便で
+        "question_km": "តើខែនេះអ្នកចង់ស្វែងយល់អ្វី?",
         "source": "ask",
         "required": True,
         "notion_prop": "RQ",

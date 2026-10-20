@@ -39,6 +39,39 @@ def _() -> None:
     assert base._clip(text, {"stt_km": text}) == text
 
 
+@suite.case("1回目はそのまま入る")
+def _() -> None:
+    assert base._appended(None, "I used group work.") == "I used group work."
+    assert base._appended("", "I used group work.") == "I used group work."
+
+
+@suite.case("2回目は空行を挟んで足される（上書きしない）")
+def _() -> None:
+    """⚠️ ここが Add more の本体。上書きすると先生の発話が消える。"""
+    out = base._appended("I used group work.", "Two quiet boys explained.")
+    assert out == "I used group work.\n\nTwo quiet boys explained."
+
+
+@suite.case("3回繰り返しても全部残る")
+def _() -> None:
+    out = ""
+    for part in ("one", "two", "three"):
+        out = base._appended(out, part)
+    assert out == "one\n\ntwo\n\nthree", out
+
+
+@suite.case("空の発話は足さない（写真だけ送られた時）")
+def _() -> None:
+    assert base._appended("one", "") == "one"
+    assert base._appended("one", "   ") == "one"
+
+
+@suite.case("クメール語を壊さない")
+def _() -> None:
+    km1, km2 = "ខ្ញុំបានប្រើការងារក្រុម", "សិស្សបានពន្យល់"
+    assert base._appended(km1, km2) == f"{km1}\n\n{km2}"
+
+
 @suite.case("授業研究だけが STT_Km を持つ（切る対象が限られる）")
 def _() -> None:
     """⚠️ 他のモードに stt_km を足すと、そのモードの文も切られ始める。
