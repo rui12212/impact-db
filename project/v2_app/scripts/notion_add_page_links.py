@@ -26,9 +26,30 @@ from __future__ import annotations
 import argparse
 import sys
 
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv
 from notion_client import Client
 
-from v2_app.core.config import DB_SCHOOL, DB_USER, NOTION_API_KEY
+# ⚠️ **V2_ENV_FILE を見る。** config から読むだけだと、コンテナに
+# 注入された環境変数（= 開発）を使ってしまい、本番に足したつもりで
+# **開発のDBを見ていた**（2026-10-22に発覚）。
+#
+#   V2_ENV_FILE=env/v2.prod.env で本番、省略すると compose の env
+#
+# override=True が必須。注入済みの値が勝つと指定が無意味になる
+_ENV_FILE = Path(os.getenv("V2_ENV_FILE", ""))
+if _ENV_FILE:
+    if not _ENV_FILE.is_absolute():
+        _ENV_FILE = Path("/app") / _ENV_FILE
+    if not _ENV_FILE.exists():
+        raise SystemExit(f"環境ファイルが見つかりません: {_ENV_FILE}")
+    load_dotenv(_ENV_FILE, override=True)
+
+DB_SCHOOL = os.getenv("NOTION_V2_SCHOOL_DB_ID", "")
+DB_USER = os.getenv("NOTION_V2_USER_DB_ID", "")
+NOTION_API_KEY = os.getenv("NOTION_V2_API_KEY", "")
 
 # (DB, 足すプロパティ名, 説明)
 TARGETS = [
@@ -53,6 +74,13 @@ def main() -> int:
 
     notion = Client(auth=NOTION_API_KEY)
     todo = []
+
+    # ⚠️ **どこを触るかを出す。** IDの文字列は見比べても間違いに
+    # 気づけないので、環境ファイルとDBの末尾を並べる
+    print(f"env ファイル : {_ENV_FILE or '（compose の env）'}")
+    print(f"School DB    : ...{DB_SCHOOL[-6:]}")
+    print(f"User DB      : ...{DB_USER[-6:]}")
+    print()
 
     for db_id, prop_name, note in TARGETS:
         db = notion.databases.retrieve(database_id=db_id)
