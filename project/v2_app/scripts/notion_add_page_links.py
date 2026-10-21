@@ -34,6 +34,11 @@ from v2_app.core.config import DB_SCHOOL, DB_USER, NOTION_API_KEY
 TARGETS = [
     (DB_USER, "Mypage", "先生のマイページのURL"),
     (DB_SCHOOL, "Schoolpage", "スクールページのURL"),
+    # マイページを学校ごとのフォルダに分ける（2026-10-21）。
+    # 外部校が入ってくるので、先生が他校のページへ行けないようにする。
+    # ⚠️ タイトルで探すのではなく**URLで覚える。**
+    #    学校名を変えると別のフォルダが作られてしまう
+    (DB_SCHOOL, "Mypagefolder", "その学校のマイページを入れるフォルダのURL"),
 ]
 
 

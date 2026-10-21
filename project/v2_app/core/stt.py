@@ -82,44 +82,68 @@ def clean_transcript(text: str) -> str:
 
 
 async def transcribe(file_path: str) -> Tuple[str, str]:
-    """音声ファイル → (クメール語の文字起こし, 英訳)。
+    """音声ファイル → (原文の文字起こし, 英訳)。
 
-    V1の decide_transcribe_model をそのまま呼ぶ。中は同期処理
-    （ffmpeg・numpy・requests）なので、別スレッドに逃がして
+    ⚠️ **原文はクメール語に限らない**（2026-10-21変更）。
+    `core/stt_gemini.py` が音声の言語を判定し、その言語で起こす。
+    日本語の音声なら日本語が返る。
+
+    V1の decide_transcribe_model は使わない。あれは
+    プロンプトに `(Khmer)` と決め打ちしていて、日本語で結果が
+    保証できない（V1本番と共用なので触らない）。
+
+    中は同期処理（ffmpeg・Gemini）なので別スレッドに逃がして
     イベントループを止めない。
 
     失敗したら ("", "") を返す。音声が1件取れなくても
     対話そのものは続けられるようにする。
     """
-    from core.audio.stt_translate import decide_transcribe_model
+    original, english, _code = await transcribe_with_lang(file_path)
+    return original, english
+
+
+async def transcribe_with_lang(file_path: str) -> Tuple[str, str, str]:
+    """音声ファイル → (原文, 英訳, 判定した言語)。
+
+    言語も知りたい呼び出し側のため（Botの返事を何語にするか等）。
+    """
+    from v2_app.core import stt_gemini
 
     try:
-        km, en = await asyncio.to_thread(
-            decide_transcribe_model, file_path, PROVIDER
+        original, english, code = await asyncio.to_thread(
+            stt_gemini.run, file_path
         )
     except Exception as e:
         log.warning("transcribe failed: %s", e)
-        return "", ""
+        return "", "", ""
 
-    return clean_transcript(km), clean_transcript(en)
+    return clean_transcript(original), clean_transcript(english), code
 
 
 async def detect_lang(file_path: str) -> str:
-    """音声の言語を判定する。'km' / 'en' など。
+    """音声の言語を判定する。'km' / 'en' / 'ja'。
 
-    guide §7-1 の言語判定。Botが返す言葉をどちらにするかに使う。
+    ⚠️ V1の detect_language は使わない。**'km' と 'en' しか返さず、
+    日本語を 'km' に丸める**（stt_translate.py:456）。
+
+    ⚠️ 通常は transcribe_with_lang を使う。あちらは判定の結果を
+    文字起こしにも使い回すので、Geminiの呼び出しが1回少ない。
     """
-    from core.audio.stt_translate import detect_language
+    from v2_app.core import stt_gemini
 
     try:
-        return await asyncio.to_thread(detect_language, file_path, PROVIDER)
+        return await asyncio.to_thread(stt_gemini.detect_lang, file_path)
     except Exception as e:
-        log.warning("detect_language failed: %s", e)
+        log.warning("detect_lang failed: %s", e)
         return ""
 
 
 def teacher_text(km: str, en: str) -> str:
-    """**先生自身の言葉**を返す。クメール語を優先する。
+    """**先生自身の言葉**を返す。原文を優先する。
+
+    ⚠️ 引数名の `km` は**原文**という意味（2026-10-21）。
+    日本語の音声なら日本語が入る。Notionのプロパティ名
+    （`STT_Km`）と揃えるために名前を変えていない。
 
     会話履歴・問いかけの生成・Notionの本文に使う。
 

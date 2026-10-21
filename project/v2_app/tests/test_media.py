@@ -23,6 +23,32 @@ def _() -> None:
     assert media._ext("", "audio/ogg") == ".ogg"
 
 
+@suite.case(".oga は .ogg に寄せる（Notionが読めないため）")
+def _() -> None:
+    """⚠️ Telegram は音声メッセージを `.oga` で返す。Notion は
+    `.oga` を知らず「Couldn't read that file」になる
+    （2026-10-22に実機で発覚）。中身は同じ Ogg。
+    """
+    assert media._ext("voice/file_5.oga", "audio/ogg") == ".ogg"
+    assert media._ext("voice/file_5.OGA", "audio/ogg") == ".ogg"
+    assert media._ext("file.opus", "audio/ogg") == ".ogg"
+    assert media._ext("", "audio/oga") == ".ogg"
+    # 他の形式は触らない
+    assert media._ext("a.mp3", "audio/mpeg") == ".mp3"
+    assert media._ext("a.m4a", "audio/mp4") == ".m4a"
+
+
+@suite.case("Content-Type も標準形にする")
+def _() -> None:
+    """⚠️ 標準でない型を R2 に載せると、音声として扱われない。"""
+    assert media.normalize_type("audio/oga") == "audio/ogg"
+    assert media.normalize_type("audio/opus") == "audio/ogg"
+    assert media.normalize_type("audio/ogg; codecs=opus") == "audio/ogg"
+    # 他はそのまま
+    assert media.normalize_type("audio/mpeg") == "audio/mpeg"
+    assert media.normalize_type("image/jpeg") == "image/jpeg"
+
+
 @suite.case("推測もできなければ拡張子なし")
 def _() -> None:
     assert media._ext("file", "application/octet-stream") == ""

@@ -31,6 +31,7 @@ from collections import Counter
 from datetime import date
 from typing import Any, Dict, List, Optional, Tuple
 
+from v2_app.core import lang
 from v2_app.core import page_layout as pl
 from v2_app.core.config import (
     DB_DAILY_LEARNING,
@@ -94,13 +95,20 @@ Rules:
 - Write in plain English. No headings, no bullet points.
 """
 
-SYSTEM_KM = """You translate a letter written to a Cambodian teacher into Khmer.
+def system_translate(language: str) -> str:
+    """英語で書いた手紙を、**記録と同じ言語**に訳すプロンプト。
+
+    ⚠️ クメール語に決め打ちしていたのをやめた（2026-10-21）。
+    先方の認識は「入力した言語で返る」で、日本語の記録に
+    クメール語が返るのはその認識と食い違う（10/17 定例 §1-15）。
+    """
+    return f"""You translate a letter written to a teacher into {language}.
 
 Rules:
 - Keep the meaning exactly. Do not add or remove anything.
-- Write natural Khmer that a primary school teacher reads easily.
+- Write natural {language} that a primary school teacher reads easily.
 - Keep the same paragraph breaks.
-- Output only the Khmer text.
+- Output only the {language} text.
 """
 
 
@@ -251,13 +259,23 @@ async def make_summary(
     if not english:
         return "", ""
 
-    try:
-        khmer = await complete_text(SYSTEM_KM, english, model=MODEL_ASK)
-    except Exception:
-        log.exception("クメール語への翻訳に失敗")
-        khmer = ""
+    # ⚠️ **記録と同じ言語に訳す**（2026-10-21決定）。
+    # 記録の文字から見分けるので、LLMの呼び出しは増えない。
+    code = lang.guess_from_text(user)
 
-    return english, khmer
+    # 記録が英語なら訳す意味が無い。LLMを1回節約する
+    if code == "en":
+        return english, ""
+
+    try:
+        translated = await complete_text(
+            system_translate(lang.name(code)), english, model=MODEL_ASK
+        )
+    except Exception:
+        log.exception("%s への翻訳に失敗", lang.name(code))
+        translated = ""
+
+    return english, translated
 
 
 def pick_comments(rows: List[dict]) -> Tuple[Optional[dict], Optional[dict]]:
@@ -291,14 +309,21 @@ async def set_callout(block_id: str, text: str) -> None:
 async def write_comparison(
     block_id: str, label: str, level: str, comment: str, color: str
 ) -> None:
-    """読み比べのCalloutを1つ書き換える。"""
+    """読み比べのCalloutを1つ書き換える。
+
+    ⚠️ **ここで150文字に切る**（2026-10-21変更）。Notion の `Comment` は
+    全文のまま残し、**表示だけ短くする**（2026-10-13のご指示）。
+    2件を並べて見比べる場所なので、長いと比較にならない。
+    """
+    from v2_app.apps.base import clip_for_display
+
     await get_notion().blocks.update(
         block_id=block_id,
         callout={
             "rich_text": [
                 rt(f"{label}   ", bold=True, color=color),
                 rt(f"{level}\n", code=True),
-                rt(f"\u201c{comment}\u201d"),
+                rt(f"\u201c{clip_for_display(comment)}\u201d"),
             ]
         },
     )

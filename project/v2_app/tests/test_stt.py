@@ -6,7 +6,7 @@ V1のコードはV1本番と共用なので触らず、V2側で落としてい�
 
 from __future__ import annotations
 
-from v2_app.core import stt
+from v2_app.core import stt, stt_gemini
 from v2_app.tests.harness import Suite
 
 suite = Suite("stt (後処理)")
@@ -66,3 +66,103 @@ def _() -> None:
     # 8分類は V1 の categorizer が英語の例文を埋め込んでいる
     assert stt.analysis_text("km", "en") == "en"
     assert stt.analysis_text("km", "") == "km"
+
+
+# ------------------------------------------------ Gemini のクライアントの扱い
+
+class _FakeModels:
+    def __init__(self, fail_times: int) -> None:
+        self.calls = 0
+        self.fail_times = fail_times
+
+    def generate_content(self, **kwargs):
+        self.calls += 1
+        if self.calls <= self.fail_times:
+            raise RuntimeError("Cannot send a request, as the client has been closed.")
+        return "ok"
+
+
+class _FakeClient:
+    def __init__(self, fail_times: int = 0) -> None:
+        self.models = _FakeModels(fail_times)
+
+
+@suite.case("クライアントは使い回す（毎回作ると2回目が落ちる）")
+def _() -> None:
+    """⚠️ 毎回 genai.Client() を作ると
+    「client has been closed」で落ちる（2026-10-22に実機で発生）。
+    1件の音声で何回も呼ぶので、使い回しが前提。
+    """
+    stt_gemini._client_cache = _FakeClient()
+    try:
+        assert stt_gemini._client() is stt_gemini._client()
+    finally:
+        stt_gemini._client_cache = None
+
+
+@suite.case("閉じられていたら作り直して1回だけやり直す")
+def _() -> None:
+    """⚠️ 使い回しの弱点。一度閉じられると、作り直さない限り
+    **プロセスを再起動するまで全部の音声が失敗する。**
+    """
+    made = []
+    real = stt_gemini._client
+
+    def fake_client():
+        if stt_gemini._client_cache is None:
+            made.append(1)
+            stt_gemini._client_cache = _FakeClient()
+        return stt_gemini._client_cache
+
+    stt_gemini._client_cache = _FakeClient(fail_times=1)
+    stt_gemini._client = fake_client
+    try:
+        assert stt_gemini._generate(model="x", contents=["y"]) == "ok"
+        assert made == [1], "作り直していない"
+    finally:
+        stt_gemini._client = real
+        stt_gemini._client_cache = None
+
+
+@suite.case("やり直しは1回だけ（無駄に使用量を増やさない）")
+def _() -> None:
+    real = stt_gemini._client
+
+    def fake_client():
+        if stt_gemini._client_cache is None:
+            stt_gemini._client_cache = _FakeClient(fail_times=9)
+        return stt_gemini._client_cache
+
+    stt_gemini._client_cache = _FakeClient(fail_times=9)
+    stt_gemini._client = fake_client
+    try:
+        raised = False
+        try:
+            stt_gemini._generate(model="x", contents=["y"])
+        except RuntimeError:
+            raised = True
+        assert raised, "ずっと落ちているのに例外を返していない"
+    finally:
+        stt_gemini._client = real
+        stt_gemini._client_cache = None
+
+
+@suite.case("閉じられ以外のエラーはそのまま投げる")
+def _() -> None:
+    """⚠️ 何でもやり直すと、本当に落ちている時に使用量だけ増える。"""
+    class _Boom:
+        class models:
+            @staticmethod
+            def generate_content(**kwargs):
+                raise ValueError("quota exceeded")
+
+    stt_gemini._client_cache = _Boom()
+    try:
+        raised = ""
+        try:
+            stt_gemini._generate(model="x", contents=["y"])
+        except ValueError as e:
+            raised = str(e)
+        assert raised == "quota exceeded", raised
+    finally:
+        stt_gemini._client_cache = None

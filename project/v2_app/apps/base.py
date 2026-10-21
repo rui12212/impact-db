@@ -5,7 +5,7 @@ import logging
 import os
 import tempfile
 from datetime import date
-from typing import Any, Dict, List, Optional, Callable
+from typing import Any, Callable, Dict, List, Optional, Set
 
 import httpx
 
@@ -28,6 +28,13 @@ log = logging.getLogger("impactdb.v2")
 SAVE = "save"
 MORE = "more"
 
+# 写真・動画があるかを聞くボタン（2026-10-21追加）。
+#
+# ⚠️ **文字で答えさせない。** 「none」と打たれると、その文字が
+#    そのまま Note に足されて記録に残ってしまった。
+MEDIA_YES = "media:yes"
+MEDIA_NO = "media:no"
+
 
 class _SkipAI(Exception):
     """source="ai" の項目が無いモードで要約を飛ばすための印。"""
@@ -44,6 +51,18 @@ TEXTS: Dict[str, Dict[str, str]] = {
     "no_session": {"en": "Please choose what to record with /start", "km": "សូមជ្រើសរើសអ្វីដែលត្រូវកត់ត្រាដោយប្រើ /start"},
     "btn_save": {"en": "Save", "km": "រក្សាទុក"},
     "btn_more": {"en": "Add more", "km": "បន្ថែមទៀត"},
+    "btn_yes": {"en": "Yes", "km": "បាទ/ចាស"},
+    "btn_no": {"en": "No", "km": "ទេ"},
+    # 文字起こしが裏で走っている間に確認カードを見た時。
+    # 本文がまだ入っていないので、空の記録に見えてしまう
+    "transcribing": {
+        "en": "(Your voice message is still being written down. It will be included.)",
+        "km": "(សារជាសំឡេងរបស់អ្នកកំពុងត្រូវបានសរសេរចុះ។ វានឹងត្រូវបានបញ្ចូល។)",
+    },
+    "send_media": {
+        "en": "Please send the photo or video now.",
+        "km": "សូមផ្ញើរូបថត ឬវីដេអូឥឡូវនេះ។",
+    },
     "media_failed": {"en": "Could not read that file.", "km": "មិនអាចអានឯកសារនោះបានទេ។"},
     "confirm_head": {"en": "Is this correct?", "km": "តើនេះត្រឹមត្រូវទេ?"},
     # 打ち込んだ直後に必ず出す。LLMに5〜10秒、音声の文字起こしには
@@ -208,19 +227,19 @@ def _appended(before: Any, text: str) -> str:
     return f"{head}{SEP_NOTE}{tail}"
 
 
-def _clip(text: str, filled: Dict[str, Any]) -> str:
-    """長い文を VERBATIM_MAX で切って「…」を付ける。
+def clip_for_display(text: str) -> str:
+    """一覧やカードに並べるときだけ短くする。150文字＋「…」。
 
-    ⚠️ **全文の控えが STT_Km にある時だけ切る。** 打ち込まれた文は
-    そこにしか無いので、切ると消える（2026-10-13 ユーザー要望は
-    「元のデータベースの文字数は変えずに表示だけ」）。
+    ⚠️ **保存するときには切らない**（2026-10-21変更）。
+    ご指示は「元のデータベースの文字数は変えずに、表示だけ点点点」
+    （2026-10-13）だったが、保存時に切っていたので食い違っていた。
 
-    音声・動画は stt.py が STT_Km に全文を入れているので、
-    Comment 側は先頭150文字でよい。中身が重複するのは承知の上。
+    さらに `accumulate` で発話を足していく形にしたため、保存時に切ると
+    **2回目以降の発話が見えなくなる。** Notion には全文を入れ、
+    読み比べのカードに出すときだけここで短くする。
     """
+    text = (text or "").strip()
     if len(text) <= VERBATIM_MAX:
-        return text
-    if not filled.get("stt_km"):
         return text
     return text[:VERBATIM_MAX].rstrip() + ELLIPSIS
 
@@ -235,6 +254,30 @@ def _fill_if_present(
     )
 
 
+def _append_if_present(
+    route: str, telegram_id: int, fields: List[flow.Field], values: Dict[str, Any]
+) -> None:
+    """schema にある key に**足していく。** 上書きしない。
+
+    ⚠️ 音声を複数通送ると、1通ごとに中身が違う。上書きだと
+    **最後の1通の文字起こしだけが残る**（2026-10-22に発覚）。
+    写真はリストに足されるので問題にならなかったが、文字は上書きだった。
+
+    `STT_Km` は全文の控えなので、足すほうが筋が通る
+    （2026-10-22 ユーザー判断）。`Translated_En` も同じ理由で足す。
+    足さないと、8分類に渡る英訳が**最後の1通の分だけ**になる。
+    """
+    keys = {f["key"] for f in fields}
+    current = _filled(route, telegram_id)
+    merged = {
+        k: _appended(current.get(k), v)
+        for k, v in values.items()
+        if k in keys and v
+    }
+    if merged:
+        session.update_filled(route, telegram_id, merged)
+
+
 def _media_key(fields: List[flow.Field], kind: str) -> Optional[str]:
     """写真を Image、音声を Audio に振り分けるための項目を探す。
 
@@ -244,6 +287,41 @@ def _media_key(fields: List[flow.Field], kind: str) -> Optional[str]:
         if f.get("source") == "media" and f.get("media_kind") == kind:
             return f["key"]
     return None
+
+
+def _media_key_for(inc: Incoming, fields: List[flow.Field]) -> Optional[str]:
+    """このメディアを入れる項目。
+
+    ⚠️ **音声として送られたものは、送り方に関わらず Audio に入れる**
+    （2026-10-21追加）。mp3 を「ファイル」で添付すると
+    kind="document" になり、授業研究には document 用の項目が無いので
+    **R2 にも Notion にも残らなかった。**
+
+    音声ファイルは残す必要がある（2026-10-21 ユーザー判断）ので、
+    document で中身が音声なら voice の項目を使う。
+    """
+    key = _media_key(fields, inc.kind)
+    if key:
+        return key
+    if _is_audio(inc):
+        return _media_key(fields, "voice")
+    return None
+
+
+def _is_audio(inc: Incoming) -> bool:
+    """文字起こしの対象かどうか。
+
+    ⚠️ **「ファイル」として送られた音声も対象にする**（2026-10-21追加）。
+    dispatcher は Telegram の `voice` と `audio` を kind="voice" に寄せるが、
+    **mp3 を「ファイル」で添付すると kind="document" になる。**
+    以前は document を素通りさせていたので、R2に上がるだけで
+    **文字起こしも分類もされなかった。**
+    """
+    if inc.kind == "voice":
+        return True
+    if inc.kind != "document":
+        return False
+    return (inc.mime_type or "").split(";")[0].strip().lower().startswith("audio/")
 
 
 async def _store_media(inc: Incoming, fields: List[flow.Field], route: str) -> str:
@@ -258,7 +336,7 @@ async def _store_media(inc: Incoming, fields: List[flow.Field], route: str) -> s
     """
     url = await telegram.get_file_url(inc.file_id)
 
-    key = _media_key(fields, inc.kind)
+    key = _media_key_for(inc, fields)
     if key:
         try:
             public_url = await media.upload_from_url(
@@ -278,10 +356,33 @@ async def _store_media(inc: Incoming, fields: List[flow.Field], route: str) -> s
         except Exception:
             log.exception("R2へのアップロードに失敗 route=%s", route)
 
-    if inc.kind != "voice":
-        return inc.text
+    # ⚠️ **文字起こしはここでやらない**（2026-10-22変更）。
+    # 待っていると 50秒の音声で Thinking が50秒出続ける。
+    # 呼び出し側が start_transcribe で裏に回す
+    return inc.text
 
-    # V1の core/audio がファイルパスを受ける作りなので、一度落とす
+
+# 走っている文字起こし。保存のときに待ち合わせる
+_transcribing: Dict[int, Set["asyncio.Task"]] = {}
+
+# 保存の鍵のTTL（秒）。**文字起こしの待ち時間より長くする。**
+# 待っている間に切れると、もう一度 Save が押せてNotionに二重で書かれる
+SAVE_LOCK_TTL = 120
+
+# 文字起こしを待つ上限（秒）。SAVE_LOCK_TTL より短くする
+TRANSCRIBE_WAIT = 100
+
+
+async def _transcribe_later(
+    inc: Incoming, fields: List[flow.Field], route: str, accumulate: str
+) -> None:
+    """音声を**裏で**文字起こしして、本文に足す。
+
+    ⚠️ 終わっても返事はしない。会話はもう先に進んでいる。
+    失敗した時だけ先生に伝える。
+    """
+    url = await telegram.get_file_url(inc.file_id)
+
     path = ""
     try:
         suffix = media._ext("", inc.mime_type) or ".ogg"
@@ -302,12 +403,65 @@ async def _store_media(inc: Incoming, fields: List[flow.Field], route: str) -> s
 
     if not (km or en):
         await telegram.send_message(inc.chat_id, t("media_failed"))
-        return ""
+        return
 
-    _fill_if_present(
+    # ⚠️ **足す。** 音声を複数通送ると1通ごとに中身が違うので、
+    # 上書きだと最後の1通だけが残る（2026-10-22に発覚）
+    _append_if_present(
         route, inc.telegram_id, fields, {"stt_km": km, "translated_en": en}
     )
-    return stt.teacher_text(km, en)
+
+    text = stt.teacher_text(km, en)
+    if text and accumulate:
+        current = _filled(route, inc.telegram_id)
+        session.update_filled(
+            route,
+            inc.telegram_id,
+            {accumulate: _appended(current.get(accumulate), text)},
+        )
+        session.append_history(route, inc.telegram_id, "user", text)
+
+    log.info("裏で文字起こしを足した route=%s %d文字", route, len(text))
+
+
+def start_transcribe(
+    inc: Incoming, fields: List[flow.Field], route: str, accumulate: str
+) -> None:
+    """文字起こしを裏で始める。保存のときに待ち合わせられるよう登録する。"""
+    task = asyncio.create_task(
+        _transcribe_later(inc, fields, route, accumulate)
+    )
+    _transcribing.setdefault(inc.telegram_id, set()).add(task)
+    task.add_done_callback(
+        lambda t: _transcribing.get(inc.telegram_id, set()).discard(t)
+    )
+
+
+def transcribing_count(telegram_id: int) -> int:
+    return len(_transcribing.get(telegram_id) or ())
+
+
+async def wait_transcribing(telegram_id: int) -> None:
+    """走っている文字起こしを待つ。**Notionに書く前に呼ぶ。**
+
+    ⚠️ ここを飛ばすと、文字起こしが終わる前にNotionへ書き込み、
+    **音声の中身が入らないまま記録が確定する**（セッションも消えるので
+    あとから足すこともできない）。
+
+    上限を置くのは、終わらない処理で保存が止まらないようにするため。
+    超えたら音声なしで書く。記録が残らないより良い。
+    """
+    tasks = set(_transcribing.get(telegram_id) or ())
+    if not tasks:
+        return
+
+    log.info("文字起こしの完了を待つ: %d件", len(tasks))
+    done, pending = await asyncio.wait(tasks, timeout=TRANSCRIBE_WAIT)
+    if pending:
+        log.warning(
+            "文字起こしが %d秒で終わらなかった: %d件。音声なしで保存する",
+            TRANSCRIBE_WAIT, len(pending),
+        )
 
 
 # Slackに添付するメディアの種類。**音声は入れない。**
@@ -387,6 +541,18 @@ async def handle(
 
     # --- ボタン ---
     if inc.is_callback:
+        # ⚠️ **ボタンのメッセージは消さない**（2026-10-21決定）。
+        # 「はい」を押し間違えた先生が、あとで「いいえ」を押して
+        # 先へ進めるようにしておく。
+        if inc.text == MEDIA_YES:
+            await telegram.send_message(inc.chat_id, t("send_media"))
+            return
+        if inc.text == MEDIA_NO:
+            await _confirm(
+                inc, route, fields, _filled(route, inc.telegram_id)
+            )
+            return
+
         if inc.text == SAVE:
             # ⚠️ before_save / after_save を必ず渡す。
             # 渡し忘れると、モード固有の処理が全部動かない
@@ -428,10 +594,55 @@ async def handle(
     # 2つ出る（2026-10-13に実機で発生）。
     # 鍵は原子的なので、必ず1つだけが先に進む
     if inc.has_media:
-        if not session.acquire_lock("media_reply", inc.telegram_id, ttl=8):
+        got_turn = session.acquire_lock("media_reply", inc.telegram_id, ttl=8)
+
+        # ⚠️ **音声は待たない**（2026-10-22変更）。文字起こしは裏に回し、
+        # 会話だけ先に進める。以前は完了を待っていたので、50秒の音声で
+        # **Thinking が50秒出続けていた。**
+        #
+        # 取りこぼさない仕組み: 保存は「Saved」を先に返してNotionへの
+        # 書き込みを裏でやるので、そこで wait_transcribing() が待つ
+        if _is_audio(inc):
+            await _store_media(inc, fields, route)       # R2 に残す
+            start_transcribe(inc, fields, route, accumulate)
+
+            if got_turn:
+                # ⚠️ **写真の有無だけを聞く**（2026-10-22決定）。
+                # 深掘りの固定文も一緒に出していたが、2つ並ぶと
+                # 何に答えればよいか分からない。
+                # 本文がまだ無いので、内容に触れた深掘りは作れない
+                filled = _filled(route, inc.telegram_id)
+                if _should_ask_media(route, inc.telegram_id, fields, filled):
+                    session.set_pending(route, inc.telegram_id, MEDIA_ASKED)
+                    question = t("ask_media")
+                    rows = [
+                        [(_btn("btn_yes"), MEDIA_YES), (_btn("btn_no"), MEDIA_NO)]
+                    ]
+                else:
+                    # 写真はもう聞いた（または聞く項目が無い）。
+                    # 深掘りの固定文を出して、保存もできるようにする。
+                    #
+                    # ⚠️ Add more も出す（2026-10-22 ユーザー要望）。
+                    # Save だけだと「まだ話したいことがある」先生の行き先が無い
+                    question = f"{ask.FOLLOWUP_EN}\n{ask.FOLLOWUP_KM}"
+                    session.append_history(
+                        route, inc.telegram_id, "assistant", question
+                    )
+                    rows = [
+                        [(_btn("btn_save"), SAVE), (_btn("btn_more"), MORE)]
+                    ]
+
+                await telegram.send_message(
+                    inc.chat_id,
+                    question,
+                    reply_markup=telegram.inline_keyboard(rows),
+                )
+            return
+
+        if not got_turn:
             # 同じ束の2枚目以降。**保存はするが返事はしない**
             await _store_media(inc, fields, route)
-            log.info("同じ束の2枚目以降。保存だけして返事はしない")
+            log.info("同じ束の2枚目以降。返事はしない")
             return
 
     notice_id = await _thinking(inc, route)
@@ -439,8 +650,6 @@ async def handle(
     async with telegram.typing(inc.chat_id):
         if inc.has_media:
             text = await _store_media(inc, fields, route)
-            if not text and inc.kind == "voice":
-                return
 
         if text:
             session.append_history(route, inc.telegram_id, "user", text)
@@ -459,12 +668,13 @@ async def handle(
                         {accumulate: _appended(current.get(accumulate), text)},
                     )
                 else:
+                    # accumulate を渡していないモード（探究テーマ）。
+                    # 答えは1つなので、そのまま入れる
                     field = flow.next_field(fields, filled=current)
                     if field is not None:
-                      session.update_filled(
-                          route, inc.telegram_id,
-                          {field["key"]: _clip(text, current)},
-                      )
+                        session.update_filled(
+                            route, inc.telegram_id, {field["key"]: text}
+                        )
             else:
                 try:
                     values = await extract.extract_values(
@@ -516,7 +726,16 @@ async def handle(
     # （2026-10-13決定）。先生は口頭で話すと写真を忘れる
     if _should_ask_media(route, inc.telegram_id, fields, filled):
         session.set_pending(route, inc.telegram_id, MEDIA_ASKED)
-        await _reply(inc, notice_id, t("ask_media"), route=route)
+        # ⚠️ **ボタンで聞く**（2026-10-21変更）。文字で答えさせると
+        # 「none」が Note に足されて記録に残った
+        rows = [[(_btn("btn_yes"), MEDIA_YES), (_btn("btn_no"), MEDIA_NO)]]
+        await _reply(
+            inc,
+            notice_id,
+            t("ask_media"),
+            reply_markup=telegram.inline_keyboard(rows),
+            route=route,
+        )
         return
 
     await _confirm(inc, route, fields, filled, notice_id)
@@ -529,12 +748,23 @@ async def _confirm(
     filled: Dict[str, Any],
     notice_id: Optional[int] = None,
 ) -> None:
+    # ⚠️ 本文が空のこともある（音声の文字起こしが裏で走っている間）。
+    # 空の行を並べないよう、ある部分だけを繋ぐ
+    parts = [t("confirm_head")]
+
     body = flow.render_confirmation(fields, filled)
+    if body:
+        parts.append(body)
+
+    # 一言添えないと「記録に失敗した」ように見える（2026-10-22）
+    if transcribing_count(inc.telegram_id):
+        parts.append(t("transcribing"))
+
     rows = [[(_btn("btn_save"), SAVE), (_btn("btn_more"), MORE)]]
     await _reply(
         inc,
         notice_id,
-        f"{t('confirm_head')}\n\n{body}",
+        "\n\n".join(parts),
         reply_markup=telegram.inline_keyboard(rows),
         route=route,
     )
@@ -561,7 +791,9 @@ async def _save(
     ⚠️ Notionに触る前に鍵を取る。clear_session だけでは、
     ほぼ同時の2タップが両方「セッションあり」を読んでしまう
     """
-    if not session.acquire_lock("save", inc.telegram_id):
+    # ⚠️ TTL は文字起こしの待ち時間より長くする（SAVE_LOCK_TTL）。
+    # 待っている間に切れると、もう一度 Save が押せてNotionに二重で書かれる
+    if not session.acquire_lock("save", inc.telegram_id, ttl=SAVE_LOCK_TTL):
         await telegram.send_message(inc.chat_id, t("in_progress"))
         return
 
@@ -571,7 +803,14 @@ async def _save(
 
     # --- 先生にはここで返す ---
     filled = _filled(route, inc.telegram_id)
-    done = f"{t('saved')}\n\n{flow.render_confirmation(fields, filled)}"
+
+    # ⚠️ 文字起こしが走っている間は**中身を出さない。** まだ本文が
+    # 入っていないので、出すと「空の記録が保存された」ように見える。
+    # Notionには wait_transcribing() のあとで完全なものが入る
+    if transcribing_count(inc.telegram_id):
+        done = t("saved")
+    else:
+        done = f"{t('saved')}\n\n{flow.render_confirmation(fields, filled)}"
     if inc.message_id:
         # 押したボタンを消す。あとから押し直せないように
         await telegram.edit_message_text(inc.chat_id, inc.message_id, done)
@@ -611,6 +850,11 @@ async def _save_background(
     失敗したので、**必ず伝える。**
     """
     try:
+        # ⚠️ **文字起こしの完了を待つ。** 先生はもう「Saved」を受け取って
+        # いるので、ここで待っても待たせていない。飛ばすと
+        # **音声の中身が入らないまま記録が確定する**（2026-10-22）
+        await wait_transcribing(inc.telegram_id)
+
         # 自動で入る項目
         _fill_if_present(route, inc.telegram_id, fields, {
             "date": date.today().isoformat(),

@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import logging
 from typing import Any, Dict
@@ -14,7 +15,7 @@ from typing import Any, Dict
 from v2_app.apps import base
 from v2_app.apps.lesson_study import repo
 from v2_app.apps.lesson_study.schema import DB_ID, FIELDS
-from v2_app.core import categorize, session, telegram
+from v2_app.core import categorize, lang, session, stt_gemini, telegram
 from v2_app.router.dispatcher import Incoming
 
 log = logging.getLogger("impactdb.v2")
@@ -99,13 +100,32 @@ def slack_head(user: Dict[str, Any], filled: Dict[str, Any]) -> str:
 
 
 async def before_save(inc: Incoming, user: Dict[str, Any]) -> None:
-    """保存の直前に8分類を当てる。"""
-    filled = (session.get_session(ROUTE, inc.telegram_id) or {}).get("filled", {})
+    """保存の直前に8分類を当てる。英訳が無ければ先に作る。
 
-    label = await categorize.categorize(
-        filled.get("comment") or "",
-        text_en=filled.get("translated_en") or "",
-    )
+    ⚠️ **打ち込みには英訳が無い**（2026-10-21に気づいた）。音声は
+    `stt_gemini.run()` が英訳まで作るが、テキストで打った場合は
+    `translated_en` が空のまま分類に渡っていた。V1の分類器は
+    英語の例文を埋め込んでいるので、原文（クメール語・日本語）を
+    渡すと精度が落ちる。
+
+    英語で打った場合は訳さない（訳す意味が無い）。
+    """
+    filled = (session.get_session(ROUTE, inc.telegram_id) or {}).get("filled", {})
+    comment = filled.get("comment") or ""
+    english = filled.get("translated_en") or ""
+
+    if comment and not english and lang.guess_from_text(comment) != "en":
+        try:
+            english = await asyncio.to_thread(stt_gemini.translate_to_en, comment)
+        except Exception:
+            log.exception("打ち込みの英訳に失敗 route=%s", ROUTE)
+            english = ""
+        if english:
+            session.update_filled(
+                ROUTE, inc.telegram_id, {"translated_en": english}
+            )
+
+    label = await categorize.categorize(comment, text_en=english)
     if label:
         session.update_filled(ROUTE, inc.telegram_id, {"category": label})
 
@@ -150,6 +170,7 @@ async def handle(inc: Incoming, user: Dict[str, Any]) -> None:
                 slack_head=slack_head,
                 followup=False,
                 use_llm=False,
+                accumulate="comment",
             )
             return
 
@@ -176,4 +197,9 @@ async def handle(inc: Incoming, user: Dict[str, Any]) -> None:
         # **文字起こしが Comment に入らなかった**（2026-10-13に発覚）。
         # 答える欄は Comment の1つだけなので、言ったことをそのまま入れる
         use_llm=False,
+        # ⚠️ **足していく。** 渡していなかったので、2回目以降の発話が
+        # どこにも保存されず**消えていた**（2026-10-21に発覚）。
+        # comment は required なので、1回目で埋まると flow.next_field が
+        # None を返し、保存先が無くなる
+        accumulate="comment",
     )

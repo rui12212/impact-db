@@ -167,20 +167,6 @@ def set_lang(telegram_id: int, lang:str) -> None:
     user["lang"] = lang
     set_user(telegram_id, user)
 
-def get_lang_choice(telegram_id: int) -> Optional[str]:
-    """設定で**先生自身が選んだ**言語。選んでいなければ None。
-
-    ⚠️ `lang`（Telegram が教えてくる端末の言語）とは別に持つ。
-    混ぜると「本人が選んだのか、端末から来たのか」が区別できず、
-    端末の設定が変わった時にどちらを優先すべきか決められない。
-
-    ⚠️ **正本は Notion の User.Language。** ここはキャッシュ。
-    user_repo.get_or_create_user が Notion から読んで入れる
-    → core/lang.py
-    """
-    user = get_user(telegram_id)
-    return user.get("language") if user else None
-
 def clear_user(telegram_id: int) -> None:
     get_redis().delete(_user_key(telegram_id))
 

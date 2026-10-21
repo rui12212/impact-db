@@ -515,6 +515,49 @@ async def school_names() -> Dict[str, str]:
     return {p["id"]: _title(p, "School Name") for p in await paginate(DB_SCHOOL)}
 
 
+async def ensure_school_folder(school_id: str) -> Optional[str]:
+    """その学校のマイページを入れるフォルダを返す（無ければ作る）。
+
+    ```
+    Teacher Mypages          NOTION_V2_MYPAGE_ROOT_ID
+    └ Lab School             ← これ
+       ├ Tohei
+       └ Sophea
+    ```
+
+    **学校ごとに分ける理由**（2026-10-21決定）。外部校が入ってくるので、
+    先生が他校のマイページへ行けないようにする。Notion の権限は
+    ページの階層に沿って降りるので、**このフォルダに招待すれば
+    その学校の中だけが見える。**
+
+    ⚠️ 場所は `School.Mypagefolder`（URL）で覚える。**タイトルで探さない。**
+    学校名を変えると別のフォルダを作ってしまう。
+
+    返すのは page id。作れなければ None。冪等。
+    """
+    from v2_app.core.config import DB_SCHOOL  # noqa: F401
+
+    root = os.getenv("NOTION_V2_MYPAGE_ROOT_ID")
+    if not root or not school_id:
+        return None
+
+    notion = get_notion()
+    school = await notion.pages.retrieve(page_id=school_id)
+    existing = _url(school, "Mypagefolder")
+    if existing:
+        return pl.page_id_from_url(existing) or None
+
+    name = _title(school, "School Name") or "Unknown school"
+    page = await notion.pages.create(
+        parent={"type": "page_id", "page_id": root},
+        icon={"type": "emoji", "emoji": "🏫"},
+        properties={"title": {"title": [{"text": {"content": name}}]}},
+    )
+    await update_page(school_id, {"Mypagefolder": {"url": page["url"]}})
+    log.info("マイページのフォルダを作った %s %s", name, page["url"])
+    return page["id"]
+
+
 async def ensure_by_user_id(user_id: str) -> Optional[str]:
     """その先生のマイページが無ければ作る。あれば何もしない。
 
@@ -539,10 +582,15 @@ async def ensure_by_user_id(user_id: str) -> Optional[str]:
     if teacher["mypage"]:
         return teacher["mypage"]
 
+    # ⚠️ **学校ごとのフォルダの中に作る**（2026-10-21変更）。
+    # 外部校が入ってくるので、先生が他校のマイページへ行けないようにする。
+    # フォルダを作れなかった時は root に作る（マイページが無い方が困る）
+    parent_id = await ensure_school_folder(teacher["school_id"]) or root
+
     schools = await school_names()
     notion = get_notion()
     page = await notion.pages.create(
-        parent={"type": "page_id", "page_id": root},
+        parent={"type": "page_id", "page_id": parent_id},
         icon={"type": "emoji", "emoji": "🌱"},
         properties={"title": {"title": [{"text": {"content": teacher["name"]}}]}},
     )

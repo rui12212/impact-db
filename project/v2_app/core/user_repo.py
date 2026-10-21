@@ -79,9 +79,6 @@ async def get_or_create_user(
         # バッチがマイページのブロックを書き換える先。
         # notion_page_create.py が書き込む（まだ無ければ空）
         "mypage": _url(page, "Mypage"),
-        # 設定で選んだ言語。**Notion が正本**（Redis が飛んでも残る）。
-        # 空なら Telegram の言語コードに落とす → core/lang.py
-        "language": _select(page, "Language") or "",
         "school_id": "",
         "school_name": "",
     }
@@ -183,28 +180,5 @@ async def rename(telegram_id: int, new_name: str) -> Dict[str, Any]:
     )
 
     user["name"] = new_name
-    session.set_user(telegram_id, user)
-    return user
-
-
-async def set_language(telegram_id: int, lang: str) -> Dict[str, Any]:
-    """先生が選んだ言語を変える。Notion と Redis の両方を直す。
-
-    ⚠️ **Notion が正本**（2026-10-20決定）。Redis だけに持つと
-    コンテナを止めた時に消え、端末の言語設定に戻ってしまう。
-
-    対応外の言語コードは受け取らない（core/lang.py の SUPPORTED）。
-    """
-    from v2_app.core import lang as lang_mod
-
-    code = lang_mod.normalize(lang)
-    user = await get_or_create_user(telegram_id)
-    page_id = user.get("notion_page_id")
-    if not page_id or not code:
-        return user
-
-    await update_page(page_id, {"Language": {"select": {"name": code}}})
-
-    user["language"] = code
     session.set_user(telegram_id, user)
     return user

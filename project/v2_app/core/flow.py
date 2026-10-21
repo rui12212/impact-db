@@ -116,4 +116,8 @@ def render_confirmation(fields: List[Field], filled: Dict[str, Any]) -> str:
         if len(text) > CONFIRM_MAX_CHARS:
             text = text[:CONFIRM_MAX_CHARS] + "…"
         lines.append(f"{label}: {text}")
-    return "\n".join(lines) if lines else "（まだ何も記録されていません）"
+    # ⚠️ 空のときに文を出さない（2026-10-22変更）。音声の文字起こしは
+    # 裏で走るので、確認カードを見た時点では空のことがある。
+    # そこに「まだ何も記録されていません」と出ると、**記録に失敗したと
+    # 誤解される。** 代わりに base.py が「文字起こし中」の1行を添える
+    return "\n".join(lines)

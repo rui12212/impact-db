@@ -1,32 +1,28 @@
-"""先生の言語をどう決めるかを1箇所にまとめる。
+"""言語コードの扱いを1箇所にまとめる。
 
 → modify/2026-10-20-japanese-input-language-design.md
 
-**打ち込み（テキスト）**
+**使うのは音声の言語判定の結果を扱うとき。**
+`stt.detect_lang()` が返したコードを正規化し、プロンプトに渡す
+言語名に変換する。
 
-    ① 設定で選んだ言語        Notion の User.Language（Redis にキャッシュ）
-    ② Telegram の言語コード    初回接触時に入る（router/dispatcher.py）
-    ③ 既定                    km
+⚠️ **先生ごとに言語を保存しない**（2026-10-21決定）。
 
-**音声**
+    Telegram の送信メッセージ   英語＋クメール語で**固定**（先方決定 1-16）
+    打ち込んだ文               そのまま保存する。言語を見ない
+    音声                      **中身から判定する**
+    8分類                     何語であれ英訳を渡す
+    AIサマリー                 **記録と同じ言語で書く**（先方決定 1-15）
 
-    ① 音声の中身をLLMが判定   ← これだけ。ここは使わない（stt.detect_lang）
-
-⚠️ **音声で端末の設定を見ない理由。** 端末の表示言語と、実際に話す言語は
-   一致しない。英語設定の端末で日本語を話す組み合わせが普通に起きる。
-   打ち込みは本人が選んだ言語で書くので設定で足りるが、音声は中身を
-   聞かないと分からない（2026-10-20決定）。
-
-⚠️ 選んだ言語は **Notion が正本**。Redis だけに持つとコンテナを止めた時に
-   消える（2026-10-20決定）。
+    → どこにも「保存した言語」が要らないので、`User.Language` を持たない。
+      持たなくて済むものを持つと、設定画面と運用がそのぶん増える。
 """
 
 from __future__ import annotations
 
 import logging
+import re
 from typing import Optional
-
-from v2_app.core import session
 
 log = logging.getLogger("impactdb.v2")
 
@@ -41,36 +37,24 @@ NAMES = {
     "ja": "Japanese",
 }
 
-# 設定の画面に出す名前。先生自身が読む
-LABELS = {
-    "km": "ភាសាខ្មែរ (Khmer)",
-    "en": "English",
-    "ja": "日本語 (Japanese)",
-}
-
-
 def normalize(value: Optional[str]) -> str:
     """'ja-JP' や 'JA' を 'ja' にする。対応外なら空。
 
-    Telegram の言語コードは 'en-US' のような形で来ることがある。
+    LLMが 'Japanese' や 'ja-JP' のような形で返してくることがあるので、
+    判定結果はここを通してから使う。
     """
     if not value:
         return ""
-    code = value.strip().lower().replace("_", "-").split("-")[0]
+
+    text = value.strip().lower()
+
+    # 言語名で返ってきた場合（'Khmer' / 'japanese' など）
+    for code, english in NAMES.items():
+        if text == english.lower():
+            return code
+
+    code = text.replace("_", "-").split("-")[0]
     return code if code in SUPPORTED else ""
-
-
-def for_text(telegram_id: int) -> str:
-    """打ち込みの時に使う言語。必ず SUPPORTED のどれかを返す。"""
-    chosen = normalize(session.get_lang_choice(telegram_id))
-    if chosen:
-        return chosen
-
-    from_device = normalize(session.get_lang(telegram_id))
-    if from_device:
-        return from_device
-
-    return DEFAULT
 
 
 def name(lang: Optional[str]) -> str:
@@ -78,6 +62,34 @@ def name(lang: Optional[str]) -> str:
     return NAMES.get(normalize(lang) or DEFAULT, NAMES[DEFAULT])
 
 
-def label(lang: Optional[str]) -> str:
-    """設定の画面に出す名前。"""
-    return LABELS.get(normalize(lang) or DEFAULT, LABELS[DEFAULT])
+# 文字の範囲で言語を見分ける。
+#   クメール文字      U+1780–U+17FF
+#   ひらがな          U+3040–U+309F
+#   カタカナ          U+30A0–U+30FF
+#   漢字（CJK統合）    U+4E00–U+9FFF
+_KM = re.compile(r"[ក-៿]")
+_JA = re.compile(r"[぀-ゟ゠-ヿ]")
+_CJK = re.compile(r"[一-鿿]")
+
+
+def guess_from_text(text: str) -> str:
+    """書かれている文字から言語を見分ける。'km' / 'ja' / 'en'。
+
+    **LLMを使わない。** AIサマリーを「記録と同じ言語」で書くために、
+    記録の文字を数えるだけ（2026-10-21決定）。
+
+    ⚠️ ひらがな・カタカナが無い漢字だけの文は中国語と区別できないが、
+    この用途では問題にならない（先生は日本語かクメール語か英語で書く）。
+
+    判定できなければ英語とみなす。英語なら英訳のままで出せばよく、
+    外した時の害が小さい。
+    """
+    if not text:
+        return "en"
+
+    km = len(_KM.findall(text))
+    ja = len(_JA.findall(text)) + len(_CJK.findall(text))
+
+    if km == 0 and ja == 0:
+        return "en"
+    return "km" if km >= ja else "ja"

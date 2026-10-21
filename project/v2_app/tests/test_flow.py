@@ -166,6 +166,11 @@ def _() -> None:
     assert len(text) == len("Reflection: ") + flow.CONFIRM_MAX_CHARS + 1
 
 
-@suite.case("render_confirmation: 何も無ければ案内文")
+@suite.case("render_confirmation: 何も無ければ空（案内文を出さない）")
 def _() -> None:
-    assert flow.render_confirmation(DAILY_FIELDS, {}) == "（まだ何も記録されていません）"
+    """⚠️ 音声の文字起こしは裏で走るので、確認カードを見た時点では
+    空のことがある。そこに「まだ何も記録されていません」と出ると
+    **記録に失敗したと誤解される**（2026-10-22変更）。
+    代わりに base.py が「文字起こし中」の1行を添える。
+    """
+    assert flow.render_confirmation(DAILY_FIELDS, {}) == ""

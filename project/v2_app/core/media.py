@@ -40,6 +40,36 @@ EXT_BY_TYPE = {
     "application/pdf": ".pdf",
 }
 
+# ⚠️ **Notion は拡張子で再生できるか判断する**（2026-10-22に実機で発覚）。
+#
+# Telegram は音声メッセージのファイルパスを `.oga` で返してくるが、
+# Notion は `.oga` を知らず「Couldn't read that file」になる。
+# 中身は同じ Ogg なので、**標準形に寄せる**だけで読めるようになる。
+#
+# Content-Type も合わせて直す。`audio/oga` は標準ではない
+NORMALIZE_EXT = {
+    ".oga": ".ogg",
+    ".opus": ".ogg",   # Telegram の voice は Opus/Ogg
+}
+NORMALIZE_TYPE = {
+    "audio/oga": "audio/ogg",
+    "audio/opus": "audio/ogg",
+}
+
+
+def normalize_type(content_type: str) -> str:
+    """R2 に載せる Content-Type。標準ではない型を直す。
+
+    ⚠️ **パラメータ（`; codecs=opus` など）は落とす。** メディアの
+    扱いに影響しないうえ、残すと「直した型」と「素通りの型」で
+    形が揃わない。
+    """
+    ctype = (content_type or "").split(";")[0].strip().lower()
+    if not ctype:
+        return content_type
+    return NORMALIZE_TYPE.get(ctype, ctype)
+
+
 _s3 = None
 
 def get_s3():
@@ -60,14 +90,17 @@ def get_s3():
 def _ext(file_name: str, content_type: str) -> str:
     tail = file_name.rsplit("/", 1)[-1]
     if "." in tail:
-        return "." + tail.rsplit(".", 1)[-1].lower()
+        ext = "." + tail.rsplit(".", 1)[-1].lower()
+        # ⚠️ Notion が知らない拡張子を標準形に寄せる（NORMALIZE_EXT）
+        return NORMALIZE_EXT.get(ext, ext)
 
     ctype = (content_type or "").split(";")[0].strip().lower()
     if ctype in EXT_BY_TYPE:
-        return EXT_BY_TYPE[ctype]
+        return NORMALIZE_EXT.get(EXT_BY_TYPE[ctype], EXT_BY_TYPE[ctype])
     if ctype in ("", "application/octet-stream"):
         return ""
-    return mimetypes.guess_extension(ctype) or ""
+    ext = mimetypes.guess_extension(ctype) or ""
+    return NORMALIZE_EXT.get(ext, ext)
 
 
 def make_object_key(
@@ -88,7 +121,9 @@ def _put(key: str, data: bytes, content_type: str) -> None:
         io.BytesIO(data),
         R2_BUCKET_NAME,
         key,
-        ExtraArgs={"ContentType": content_type},
+        # ⚠️ 標準ではない型をそのまま載せると、Notion やブラウザが
+        # 音声として扱ってくれない（NORMALIZE_TYPE）
+        ExtraArgs={"ContentType": normalize_type(content_type)},
     )
 
 async def upload_bytes(data: bytes, key: str, content_type: str) -> str:

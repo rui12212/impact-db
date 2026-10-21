@@ -204,6 +204,10 @@ def build_all(notion: Client, reg: Dict[str, str]) -> None:
         "Region": sel(),  # 選択肢はアドミンが追加する
         # スクールページのURL。notion_school_page_create.py が書き込む
         "Schoolpage": URL,
+        # その学校のマイページを入れるフォルダのURL（2026-10-21）。
+        # notion_page_create.py が書き込む。学校名で探すのではなく
+        # URLで覚える（学校名を変えても別フォルダを作らないため）
+        "Mypagefolder": URL,
     })
 
     user = create_db(notion, reg, "user", "User", {

@@ -54,6 +54,7 @@ EXPECTED: Dict[str, Dict[str, Any]] = {
         "Country": "select",
         "Region": "select",
         "Schoolpage": "url",
+        "Mypagefolder": "url",
     },
     "user": {
         "Teacher Name": "title",
