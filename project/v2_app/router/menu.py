@@ -34,6 +34,14 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "en": "Cancelled. Nothing was saved.",
         "km": "បានបោះបង់។ គ្មានអ្វីត្រូវបានរក្សាទុកទេ។",
     },
+    "still_saving": {
+        "en": (
+            "Your previous record is still being saved. "
+            "Please wait a moment and choose again."
+        ),
+        # 仮訳（開発側）。先方への確認は A-9 の便で
+        "km": "កំណត់ត្រាមុនរបស់អ្នកកំពុងរក្សាទុក។ សូមរង់ចាំបន្តិច ហើយជ្រើសរើសម្តងទៀត។",
+    },
     "no_schools": {
         "en": "No schools are registered yet. Please contact the staff.",
         "km": "មិនទាន់មានសាលាណាមួយត្រូវបានចុះឈ្មោះទេ។ សូមទាក់ទងបុគ្គលិក។",
@@ -124,6 +132,22 @@ async def _start_mode(inc: Incoming, route: str) -> None:
     entry = registry.ROUTES.get(route)
     if entry is None:
         log.warning("未知のモード route=%s", route)
+        return
+
+    # ⚠️ **前の記録の保存が終わるまで始めさせない**（2026-10-26追加）。
+    # session のキーは `{app}:session:{telegram_id}` で「何回目の記録か」を
+    # 持たないので、始めてしまうと**同じ箱を上書きする。** そのあと
+    # 裏で走っている保存が最後に clear_session() を呼び、
+    # **新しいセッションを消してしまう**（base.py の _save_background）。
+    #
+    # 文字起こしを最大300秒待つようにしたので、この窓は現実的に踏める。
+    # ボタンを消す前に返す。あとで押し直せるようにするため。
+    #
+    # settings は記録を書かないので止めない（保存中に言語を変えられない
+    # のは不便なだけで、壊れるものが無い）
+    if route != "settings" and session.has_lock("save", inc.telegram_id):
+        log.info("保存中なので新しい記録を始めない route=%s", route)
+        await telegram.send_message(inc.chat_id, t("still_saving"))
         return
 
     # 押したボタンを消す。あとから押し直せないように

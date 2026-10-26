@@ -367,10 +367,17 @@ _transcribing: Dict[int, Set["asyncio.Task"]] = {}
 
 # 保存の鍵のTTL（秒）。**文字起こしの待ち時間より長くする。**
 # 待っている間に切れると、もう一度 Save が押せてNotionに二重で書かれる
-SAVE_LOCK_TTL = 120
+# （external_id は update_id から作るので、押し直した分は重複と判定されない）
+SAVE_LOCK_TTL = 360
 
-# 文字起こしを待つ上限（秒）。SAVE_LOCK_TTL より短くする
-TRANSCRIBE_WAIT = 100
+# 文字起こしを待つ上限（秒）。SAVE_LOCK_TTL より短くする。
+#
+# ⚠️ 100秒では**長い音声の中身が記録に入らなかった**（2026-10-26変更）。
+# Geminiは30秒ごとに分けて呼ぶので、呼び出し回数は音声の長さに比例する。
+#   10分の音声 → 約20チャンク → 60〜170秒
+# 打ち切ると音声ファイルだけが残り、本文が空のまま確定する。
+# **全部終わってからNotionに書く**方針にしたので、5分まで待つ
+TRANSCRIBE_WAIT = 300
 
 
 async def _transcribe_later(
@@ -707,7 +714,20 @@ async def handle(
         # ⚠️ make_question の None は「掘り下げを使い切った」と
         # 「LLMが落ちた」の両方で返る。区別できないので充足を確かめる。
         # 未充足なら schema.py の固定の質問に落とす（proposal §4-6）
-        if not question and not flow.is_complete(fields, filled):
+        #
+        # ⚠️ **文字起こし中は聞き直さない**（2026-10-26追加）。本文は
+        # これから入るので、聞き直しても先生は答えようがない。
+        #   5分の音声 → [写真はありますか] → [Yes] → 写真を送る
+        #   → text も audio_stt も空 → **同じ質問が延々と繰り返され、
+        #     文字起こしが終わるまで Save に到達できなかった**
+        # 確認カードは本文が空の場合に対応済み（_confirm が
+        # 「文字起こし中」を添える）。保存時に wait_transcribing() が
+        # 待つので内容は欠けない
+        if (
+            not question
+            and not flow.is_complete(fields, filled)
+            and not transcribing_count(inc.telegram_id)
+        ):
             question = _static_question(fields, filled)
             if question:
                 session.append_history(
@@ -910,7 +930,7 @@ async def _save_background(
                 )
                 if text:
                     sent = await slack.post(
-                        text, school_name=user.get("school_name", "")
+                        text, school_id=user.get("school_id", "")
                     )
                     if sent:
                         await _slack_media(sent, filled)

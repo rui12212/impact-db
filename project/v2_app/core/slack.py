@@ -6,11 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
-from v2_app.core.config import (
-    SLACK_BOT_TOKEN,
-    SLACK_CHANNEL_MAP,
-    SLACK_DEFAULT_CHANNEL,
-)
+from v2_app.core.config import SLACK_BOT_TOKEN, SLACK_CHANNEL_MAP
 
 log = logging.getLogger("impactdb.v2")
 
@@ -18,15 +14,35 @@ API = "https://slack.com/api"
 TIMEOUT = 15
 
 
-def channel_for(school_name: str = "") -> str:
-    """学校名 → 投稿先チャンネル。マップに無ければ既定のチャンネル。"""
-    if school_name and school_name in SLACK_CHANNEL_MAP:
-        return SLACK_CHANNEL_MAP[school_name]
-    return SLACK_DEFAULT_CHANNEL
+def _norm(page_id: str) -> str:
+    """ページIDをハイフン無しの小文字に揃える。
+
+    ⚠️ **env に貼るIDは Notion のURLから取るのでハイフンが無い**が、
+    user["school_id"] は API の relation なのでハイフン付き。
+    揃えないと一致せず、**気づかないまま投稿されなくなる**
+    """
+    return (page_id or "").replace("-", "").lower()
+
+
+# 起動時に1回だけ正規化する。投稿ごとにやる必要がない
+_CHANNEL_MAP = {_norm(k): v for k, v in SLACK_CHANNEL_MAP.items()}
+
+
+def channel_for(school_id: str = "") -> str:
+    """School のページID → 投稿先のチャンネルID。登録が無ければ空文字。
+
+    ⚠️ **学校名ではなくIDで引く。** 名前は Notion で変えられるが、
+    user:{telegram_id} のキャッシュに TTL が無く古い名前が残る。
+
+    ⚠️ **既定の投稿先は持たない（2026-10-25決定）。** Slackに流さない
+    学校があるので、**登録が無いことを「送らない」の意思表示として扱う。**
+    既定へ逃がすと、流さないと決めた学校の記録が流れ続ける
+    """
+    return _CHANNEL_MAP.get(_norm(school_id), "")
 
 
 async def post(
-    text: str, *, channel: str = "", school_name: str = ""
+    text: str, *, channel: str = "", school_id: str = ""
 ) -> Optional[Dict[str, str]]:
     """Slackに投稿する。成功したら {"channel": ..., "ts": ...}、失敗したら None。
 
@@ -46,9 +62,10 @@ async def post(
         log.info("Slack未設定のため投稿しない")
         return None
 
-    target = channel or channel_for(school_name)
+    target = channel or channel_for(school_id)
     if not target:
-        log.warning("Slackの投稿先が決まっていない")
+        # ⚠️ warning にしない。**未登録は正常な状態**（流さない学校がある）
+        log.info("Slackに流さない学校なので投稿しない school_id=%s", school_id)
         return None
 
     if not text:

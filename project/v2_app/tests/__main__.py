@@ -21,6 +21,7 @@ from v2_app.tests import (
     test_registry,
     test_schemas,
     test_session,
+    test_slack,
     test_stt,
 )
 from v2_app.tests.harness import report
@@ -36,6 +37,7 @@ SUITES = [
     test_registry.suite,
     test_schemas.suite,
     test_session.suite,
+    test_slack.suite,
     test_stt.suite,
 ]
 

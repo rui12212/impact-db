@@ -286,6 +286,34 @@ def _() -> None:
     session.release_lock("save", UID)
 
 
+@suite.case("has_lock は鍵の有無を見るだけ（取らない）")
+def _() -> None:
+    """⚠️ 取ってしまうと、保存中かを見たいだけの呼び出し側が
+    **自分で鍵を占有して**しまう（router/menu.py が使う）
+    """
+    session.release_lock("save", UID)
+    assert session.has_lock("save", UID) is False
+    # 見ただけでは取られていない → このあと取れる
+    assert session.has_lock("save", UID) is False
+    assert session.acquire_lock("save", UID) is True
+    assert session.has_lock("save", UID) is True
+    session.release_lock("save", UID)
+    assert session.has_lock("save", UID) is False
+
+
+@suite.case("has_lock は先生ごと・名前ごとに独立している")
+def _() -> None:
+    other = UID - 1
+    for name in ("save", "stt"):
+        session.release_lock(name, UID)
+        session.release_lock(name, other)
+    session.acquire_lock("save", UID)
+    assert session.has_lock("save", UID) is True
+    assert session.has_lock("save", other) is False
+    assert session.has_lock("stt", UID) is False
+    session.release_lock("save", UID)
+
+
 @suite.case("pending は設定・取得・解除できる")
 def _() -> None:
     _reset()

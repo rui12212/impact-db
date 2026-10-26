@@ -22,7 +22,8 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import List, Optional
+import shutil
+from typing import List, Optional, Tuple
 
 from v2_app.core import lang as lang_mod
 
@@ -97,13 +98,55 @@ def _generate(**kwargs):
         return _client().models.generate_content(**kwargs)
 
 
-def _chunks(file_path: str) -> List[tuple]:
-    """音声を wav にして30秒ごとに切る。**V1の部品をそのまま借りる。**"""
+def _prepare(file_path: str) -> Tuple[List[tuple], str]:
+    """音声を wav にして30秒ごとに切る。**V1の部品をそのまま借りる。**
+
+    返すのは (チャンク, 前処理後のwavのパス)。wav のパスも返すのは
+    **あとで消すため**（→ `_cleanup`）。
+
+    ⚠️ **重い。** 中では音声全体に対してノイズ低減・バンドパス・EQ・
+    正規化・VAD が走る。1件の音声につき**1回だけ**呼ぶこと
+    （2026-10-26まで detect_lang と transcribe が別々に呼んでいて、
+    同じ処理が2回走っていた）
+    """
     from core.audio.audio_preprocess import preprocess_for_stt
     from core.audio.stt_chunking import split_wav_to_chunks
 
     wav = preprocess_for_stt(file_path)
-    return split_wav_to_chunks(wav, chunk_ms=CHUNK_MS, overlap_ms=OVERLAP_MS)
+    chunks = split_wav_to_chunks(wav, chunk_ms=CHUNK_MS, overlap_ms=OVERLAP_MS)
+    return chunks, wav
+
+
+def _chunks(file_path: str) -> List[tuple]:
+    """チャンクだけ欲しい時の入口。**後片付けができないので run では使わない。**"""
+    chunks, _wav = _prepare(file_path)
+    return chunks
+
+
+def _cleanup(chunks: List[tuple], wav: str = "") -> None:
+    """一時ファイルを消す。
+
+    ⚠️ **V1 の部品は一時ファイルを消さない。** `split_wav_to_chunks` は
+    チャンクごとに `mkdtemp()` し、`preprocess_for_stt` も `mkdtemp()` する。
+    消さないと**5分の音声1本で約20MBがコンテナに残り続ける**。
+    `/tmp` は再起動で消えるので、デプロイ頻度に救われていた。
+
+    ⚠️ **1つだけ消せないものが残る。** `preprocess_for_stt` が内部で作る
+    16kHz変換後の wav（`_to_wav16k_mono` の出力）はパスが返ってこない。
+    消すには V1 の `audio_preprocess.py` を直す必要があるため見送った
+    （V1本番と共用）。
+
+    失敗しても例外にしない。後片付けで記録を落とさない。
+    """
+    paths = [c[0] for c in chunks]
+    if wav:
+        paths.append(wav)
+
+    for path in paths:
+        try:
+            shutil.rmtree(os.path.dirname(path), ignore_errors=True)
+        except Exception:
+            log.warning("一時ファイルを消せなかった: %s", path)
 
 
 def _quota() -> None:
@@ -113,12 +156,15 @@ def _quota() -> None:
     check_and_increment()
 
 
-def detect_lang(file_path: str) -> str:
+def detect_lang(file_path: str, chunks: Optional[List[tuple]] = None) -> str:
     """音声の言語。'km' / 'en' / 'ja'。判定できなければ既定（km）。
 
     **最初のチャンクだけ**を聞く。全部聞く必要が無く、呼び出しも増える。
+
+    `chunks` を渡せば分割をやり直さない。**`_prepare` は重いので、
+    run() のように続けて transcribe も呼ぶ場合は必ず渡す。**
     """
-    chunks = _chunks(file_path)
+    chunks = chunks if chunks is not None else _chunks(file_path)
     if not chunks:
         log.warning("チャンクが作れないので言語は既定にする")
         return lang_mod.DEFAULT
@@ -147,11 +193,15 @@ def detect_lang(file_path: str) -> str:
     return code
 
 
-def transcribe(file_path: str, code: str) -> str:
+def transcribe(
+    file_path: str, code: str, chunks: Optional[List[tuple]] = None
+) -> str:
     """判定した言語で文字起こしする。
 
     ⚠️ **言語を決め打ちしない。** V1は `(Khmer)` と書いていたので、
     日本語の音声で結果が保証できなかった。
+
+    `chunks` を渡せば分割をやり直さない（→ `detect_lang`）。
     """
     language = lang_mod.name(code)
     prompt = (
@@ -162,7 +212,9 @@ def transcribe(file_path: str, code: str) -> str:
     )
 
     parts: List[str] = []
-    for chunk_path, _start, _end in _chunks(file_path):
+    for chunk_path, _start, _end in (
+        chunks if chunks is not None else _chunks(file_path)
+    ):
         _quota()
         with open(chunk_path, "rb") as f:
             audio = f.read()
@@ -214,13 +266,23 @@ def run(file_path: str) -> tuple:
 
     ① 言語を判定 → ② その言語で文字起こし → ③ 英訳
 
-    Gemini を**最大3回**呼ぶ（英語の音声なら2回）。
+    Gemini の呼び出し回数は **1（判定）＋チャンク数（文字起こし）＋1（英訳）**。
+    30秒ごとに切るので、音声が長いほど増える（5分で13回）。
     同期処理なので、呼ぶ側で別スレッドに逃がす（core/stt.py）。
-    """
-    code = detect_lang(file_path)
-    original = transcribe(file_path, code)
-    if not original:
-        return "", "", code
 
-    english = translate_to_en(original, code)
-    return original, english, code
+    ⚠️ **前処理と分割は1回だけ**（2026-10-26変更）。以前は detect_lang と
+    transcribe がそれぞれ `_chunks()` を呼んでいたので、**重いDSP処理が
+    2回走り、一時ファイルも2倍残っていた**。
+    """
+    chunks, wav = _prepare(file_path)
+    try:
+        code = detect_lang(file_path, chunks=chunks)
+        original = transcribe(file_path, code, chunks=chunks)
+        if not original:
+            return "", "", code
+
+        english = translate_to_en(original, code)
+        return original, english, code
+    finally:
+        # ⚠️ **必ず消す。** 消さないと5分の音声1本で約20MB残る
+        _cleanup(chunks, wav)

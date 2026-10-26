@@ -185,6 +185,15 @@ def acquire_lock(name: str, telegram_id: int, ttl: int = 60) -> bool:
     )
 
 
+def has_lock(name: str, telegram_id: int) -> bool:
+    """鍵が取られているか。**取らずに見るだけ。**
+
+    acquire_lock は空いていれば取ってしまうので、
+    「いま保存中かどうか」を知りたいだけの用途には使えない。
+    """
+    return bool(get_redis().exists(f"lock:{name}:{telegram_id}"))
+
+
 def release_lock(name: str, telegram_id: int) -> None:
     get_redis().delete(f"lock:{name}:{telegram_id}")
     

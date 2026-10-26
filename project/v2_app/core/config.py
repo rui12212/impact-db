@@ -74,14 +74,20 @@ R2_PUBLIC_URL_BASE = _get("R2_PUBLIC_URL_BASE")
 
 # --- Slack（Bot Token方式。2026-10-09決定）---
 SLACK_BOT_TOKEN = _get("V2_SLACK_BOT_TOKEN")
-SLACK_DEFAULT_CHANNEL = _get("V2_SLACK_DEFAULT_CHANNEL")
 
-# 学校ごとにチャンネルを分ける場合のマップ。空なら既定チャンネルだけ使う
-# 例: {"Hun Sen High School": "#impact-hunsen"}
+# 学校ごとの投稿先。**登録の無い学校はSlackに流さない**（2026-10-25決定）
+#   キー : School の**ページID**（学校名は変わるため。ハイフン有無は問わない）
+#   値   : Slack の**チャンネルID**（`#名前` は使わない。リネームで届かなくなる）
+# 例: {"4002e6dcc84a81dea8d7c848876b287a": "C09ABCD1234"}
+#
+# ⚠️ 既定の投稿先は持たない。Slackに流さない学校があるので、
+#    既定へ逃がすと流さないと決めた学校の記録が流れ続ける
 try:
     SLACK_CHANNEL_MAP: dict = json.loads(_get("V2_SLACK_CHANNEL_MAP") or "{}")
-except json.JSONDecodeError:
-    SLACK_CHANNEL_MAP = {}
+except json.JSONDecodeError as e:
+    # ⚠️ 黙って {} にしない。**書き間違いでSlack投稿が全停止**し、
+    # しかも「流さない学校」と区別がつかないので誰も気づけない
+    raise RuntimeError(f"V2_SLACK_CHANNEL_MAP が JSON として壊れています: {e}")
 
 
 # 起動時に必ず揃っていてほしいもの。

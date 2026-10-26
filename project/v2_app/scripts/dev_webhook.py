@@ -1,13 +1,15 @@
 """開発用Botの webhook を、手元のトンネルのURLに貼り替える。
 
   docker compose -f docker/v2.local.yml up -d
-  python project/v2_app/scripts/dev_webhook.py
+  python3 project/v2_app/scripts/dev_webhook.py
 
   # いま貼ってある先を見るだけ
-  python project/v2_app/scripts/dev_webhook.py --info
+  python3 project/v2_app/scripts/dev_webhook.py --info
 
   # 開発Botの webhook を外す（getUpdates で試したい時など）
-  python project/v2_app/scripts/dev_webhook.py --delete
+  python3 project/v2_app/scripts/dev_webhook.py --delete
+
+⚠️ **`python3` で呼ぶ。** macOS には `python` が無い（`command not found`）。
 
 **手元で動かす。** コンテナの中からは docker のログを読めないため。
 標準ライブラリだけで動く（pip install は不要）。

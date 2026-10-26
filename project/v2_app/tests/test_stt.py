@@ -166,3 +166,36 @@ def _() -> None:
         assert raised == "quota exceeded", raised
     finally:
         stt_gemini._client_cache = None
+
+
+@suite.case("_cleanup は一時ファイルを消す")
+def _() -> None:
+    """⚠️ V1の部品は一時ファイルを消さない。消さないと
+    **5分の音声1本で約20MBがコンテナに残り続ける**（2026-10-26）。
+    """
+    import os
+    import tempfile
+
+    made = []
+    for _ in range(3):
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "chunk.wav")
+        with open(path, "wb") as f:
+            f.write(b"x")
+        made.append(path)
+
+    chunks = [(p, 0, 30_000) for p in made[:2]]
+    stt_gemini._cleanup(chunks, made[2])
+
+    remaining = [p for p in made if os.path.exists(p)]
+    assert not remaining, remaining
+    # ディレクトリごと消す（ファイルだけ消すと空ディレクトリが残る）
+    dirs = [d for d in (os.path.dirname(p) for p in made) if os.path.exists(d)]
+    assert not dirs, dirs
+
+
+@suite.case("_cleanup は消せなくても落ちない")
+def _() -> None:
+    """⚠️ 後片付けで記録を落としてはいけない。"""
+    stt_gemini._cleanup([("/tmp/does-not-exist-12345/chunk.wav", 0, 1)], "")
+    stt_gemini._cleanup([], "")
