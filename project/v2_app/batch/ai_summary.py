@@ -139,6 +139,21 @@ def _text(page: dict, prop: str) -> str:
     return "".join(i.get("plain_text", "") for i in items)
 
 
+def _comment(page: dict) -> str:
+    """授業研究の本文。**新しい置き場を先に見て、無ければ旧に落ちる。**
+
+    ⚠️ 2026-10-30にプロパティを入れ替えた（`Comment` → `Comment_org`）が、
+    **既存レコードの移行は後日に回した。** 片方だけを見ると、
+
+    - `Comment_org` だけ → デプロイ前の記録が読み比べから全部消える
+    - `Comment` だけ     → デプロイ後の記録が1件も出てこない
+
+    どちらも**マイページの読み比べが時間的に固まる**（`pick_comments` が
+    本文の空いていない行を捨てるため）。移行が終わるまで両方見る。
+    """
+    return _text(page, "Comment_org") or _text(page, "Comment")
+
+
 def _date(page: dict, prop: str = "Date") -> str:
     return (page.get("properties", {}).get(prop, {}).get("date") or {}).get(
         "start", ""
@@ -280,7 +295,7 @@ async def make_summary(
 
 def pick_comments(rows: List[dict]) -> Tuple[Optional[dict], Optional[dict]]:
     """読み比べに出す2件。最も古いものと最も新しいもの。"""
-    dated = [r for r in rows if _date(r) and _text(r, "Comment")]
+    dated = [r for r in rows if _date(r) and _comment(r)]
     if len(dated) < 2:
         return (dated[0] if dated else None), None
     return dated[0], dated[-1]
@@ -361,11 +376,11 @@ async def update_page(page_id: str, user_id: str) -> bool:
         if len(ids) >= 2:
             await write_comparison(
                 ids[0], _date(old)[:7], _select(old, "Category"),
-                _text(old, "Comment"), "gray",
+                _comment(old), "gray",
             )
             await write_comparison(
                 ids[1], _date(new)[:7], _select(new, "Category"),
-                _text(new, "Comment"), "brown",
+                _comment(new), "brown",
             )
             wrote = True
 

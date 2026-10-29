@@ -127,3 +127,43 @@ def _() -> None:
     out = _run(client, dry_run=True)
     assert out["removed"] == 2, out
     assert not client.patched, "dry-run なのに書き込んでいる"
+
+
+# ---------------------------------------------- 読み比べの本文の置き場
+
+def _row(date: str, **props: str) -> dict:
+    """授業研究の1行。本文のプロパティだけ指定する。"""
+    return {
+        "properties": {
+            "Date": {"date": {"start": date}},
+            **{
+                name: {"rich_text": [{"plain_text": text}]}
+                for name, text in props.items()
+            },
+        }
+    }
+
+
+@suite.case("読み比べは Comment_org を先に見る")
+def _() -> None:
+    from v2_app.batch import ai_summary
+
+    row = _row("2026-10-30", Comment_org="新しい置き場", Comment="旧い置き場")
+    assert ai_summary._comment(row) == "新しい置き場"
+
+
+@suite.case("読み比べは移行前のレコードも拾う（旧 Comment に落ちる）")
+def _() -> None:
+    """⚠️ 2026-10-30のプロパティ入れ替えで移行を後回しにした。
+    片方だけ見ると**マイページの読み比べが時間的に固まる。**
+    """
+    from v2_app.batch import ai_summary
+
+    old = _row("2026-09-01", Comment="移行前の記録")
+    new = _row("2026-10-30", Comment_org="移行後の記録")
+
+    assert ai_summary._comment(old) == "移行前の記録"
+
+    first, last = ai_summary.pick_comments([old, new])
+    assert first is old, "移行前の記録が捨てられている"
+    assert last is new, "移行後の記録が捨てられている"
