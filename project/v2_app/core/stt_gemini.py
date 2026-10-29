@@ -237,7 +237,18 @@ def translate_to_en(text: str, code: Optional[str] = None) -> str:
     """英訳する。8分類が英語を要求するため（core/categorize.py）。
 
     ⚠️ **英語の音声では呼ばない**（2026-10-21決定）。既に英語なので
-    Gemini を1回節約できる。呼び出し側で判断する。
+    Gemini を1回節約できる。呼び出し側で判断する
+    （`lang.guess_from_text` は文字種を数えるだけでLLMを使わない）。
+
+    ⚠️ **言語を判定しない**（2026-10-26）。渡ってくるのは打ち込みと
+    音声の文字起こしを繋いだ文で、**日本語とクメール語が混ざりうる。**
+    `lang.guess_from_text` では決められないので、**プロンプト側で
+    「英語はそのまま／英語以外を訳す」を指示して判定自体を無くす。**
+
+    ⚠️ **要約させない。** 用途が「1発話を訳す」から「蓄積された全文を
+    訳して分類に渡す」に変わった（Comment_eng）。`professional
+    interpreter` と `natural English` だけでは言い換えや整形が入り、
+    **埋め込みの近傍が変わって分類がぶれる。**
     """
     if not text.strip():
         return ""
@@ -251,9 +262,16 @@ def translate_to_en(text: str, code: Optional[str] = None) -> str:
         model=MODEL,
         config=types.GenerateContentConfig(
             system_instruction=(
-                "You are a professional interpreter. Translate the given text "
-                "into accurate, natural English. "
-                "Output ONLY the translation, with no preamble."
+                "You are a professional translator. "
+                "Return the text under these rules:\n"
+                "1. Do NOT change anything already written in English.\n"
+                "2. Translate everything written in another language "
+                "into English.\n"
+                "3. Do NOT summarize or omit anything. Even if the text does "
+                "not read well as a whole, do not alter the meaning of each "
+                "sentence.\n"
+                "4. Keep the exact original order.\n"
+                "Output ONLY the result, with no preamble."
             ),
         ),
         contents=[text],

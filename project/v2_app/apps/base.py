@@ -414,8 +414,15 @@ async def _transcribe_later(
 
     # ⚠️ **足す。** 音声を複数通送ると1通ごとに中身が違うので、
     # 上書きだと最後の1通だけが残る（2026-10-22に発覚）
+    #
+    # ⚠️ `audio_stt_org` が新しい宛先（2026-10-26）。旧キーも渡し続けるが、
+    # **schema から外したモードでは _append_if_present が捨てる。**
+    # だから授業研究は audio_stt_org にだけ入り、他モードは何も起きない
     _append_if_present(
-        route, inc.telegram_id, fields, {"stt_km": km, "translated_en": en}
+        route,
+        inc.telegram_id,
+        fields,
+        {"audio_stt_org": km, "stt_km": km, "translated_en": en},
     )
 
     text = stt.teacher_text(km, en)
@@ -673,6 +680,13 @@ async def handle(
                         route,
                         inc.telegram_id,
                         {accumulate: _appended(current.get(accumulate), text)},
+                    )
+                    # ⚠️ **打ち込みと caption は text_org にも積む**
+                    # （2026-10-26）。accumulate の宛先には音声も混ざるので、
+                    # 「打ち込みだけ」を取り出せる場所を別に持つ。
+                    # schema に無いモードでは捨てられる
+                    _append_if_present(
+                        route, inc.telegram_id, fields, {"text_org": text}
                     )
                 else:
                     # accumulate を渡していないモード（探究テーマ）。

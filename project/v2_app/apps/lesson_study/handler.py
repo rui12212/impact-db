@@ -100,32 +100,49 @@ def slack_head(user: Dict[str, Any], filled: Dict[str, Any]) -> str:
 
 
 async def before_save(inc: Incoming, user: Dict[str, Any]) -> None:
-    """保存の直前に8分類を当てる。英訳が無ければ先に作る。
+    """保存の直前に、蓄積された原文を英訳して8分類を当てる。
 
-    ⚠️ **打ち込みには英訳が無い**（2026-10-21に気づいた）。音声は
-    `stt_gemini.run()` が英訳まで作るが、テキストで打った場合は
-    `translated_en` が空のまま分類に渡っていた。V1の分類器は
-    英語の例文を埋め込んでいるので、原文（クメール語・日本語）を
-    渡すと精度が落ちる。
+    ⚠️ **英訳は `comment_org` の全文から1回だけ作る**（2026-10-26変更）。
+    以前は音声1本ごとに `stt_gemini.run()` が英訳し、それを
+    `translated_en` に積んでいた。そのため
 
-    英語で打った場合は訳さない（訳す意味が無い）。
+      1. 🔴 音声を1本でも送ると、以降の**打ち込みが分類に届かなかった**
+         （`not english` のガードで英訳を飛ばしていた）
+      2. 音声が複数あると Gemini を本数分呼んでいた
+
+    いまは打ち込みも音声も `comment_org` に積まれているので、
+    **そこを1回訳せば全部が分類に渡る。**
+
+    ⚠️ **全部英語なら訳さない。** `lang.guess_from_text` は文字種を
+    数えるだけで**LLMを使わない**ので、判定のコストがゼロ。
+    訳すと言い換えが入り、埋め込みの近傍が変わる。
+
+    ⚠️ **失敗したら原文をそのまま `comment_eng` に入れる。**
+    `Comment_eng` はカテゴライズの入力であり、英語でないほうがマシで
+    空は駄目（分類は原文でも動く。精度は落ちる）。
     """
     filled = (session.get_session(ROUTE, inc.telegram_id) or {}).get("filled", {})
-    comment = filled.get("comment") or ""
-    english = filled.get("translated_en") or ""
+    original = filled.get("comment_org") or ""
+    if not original:
+        return
 
-    if comment and not english and lang.guess_from_text(comment) != "en":
+    if lang.guess_from_text(original) == "en":
+        english = original
+    else:
         try:
-            english = await asyncio.to_thread(stt_gemini.translate_to_en, comment)
+            english = await asyncio.to_thread(stt_gemini.translate_to_en, original)
         except Exception:
-            log.exception("打ち込みの英訳に失敗 route=%s", ROUTE)
+            log.exception("英訳に失敗 route=%s", ROUTE)
             english = ""
-        if english:
-            session.update_filled(
-                ROUTE, inc.telegram_id, {"translated_en": english}
-            )
 
-    label = await categorize.categorize(comment, text_en=english)
+    analysis = english or original
+    session.update_filled(ROUTE, inc.telegram_id, {"comment_eng": analysis})
+
+    # ⚠️ **分類されるのは `text_en`**（= analysis）。第1引数は
+    # `text_en` が空のときの翻訳元としてしか使われない（categorize.py:52
+    # の `english = text_en or await to_english(text)`）。
+    # analysis は必ず埋まるので、いまは第1引数は使われない
+    label = await categorize.categorize(original, text_en=analysis)
     if label:
         session.update_filled(ROUTE, inc.telegram_id, {"category": label})
 
@@ -170,7 +187,7 @@ async def handle(inc: Incoming, user: Dict[str, Any]) -> None:
                 slack_head=slack_head,
                 followup=False,
                 use_llm=False,
-                accumulate="comment",
+                accumulate="comment_org",
             )
             return
 
@@ -195,11 +212,15 @@ async def handle(inc: Incoming, user: Dict[str, Any]) -> None:
         # ⚠️ 抽出も通さない。音声が多いモードなのに、抽出のプロンプトは
         # 「短くまとめる」「明確に述べていなければ null」なので、
         # **文字起こしが Comment に入らなかった**（2026-10-13に発覚）。
-        # 答える欄は Comment の1つだけなので、言ったことをそのまま入れる
+        # 答える欄は1つだけなので、言ったことをそのまま入れる
         use_llm=False,
         # ⚠️ **足していく。** 渡していなかったので、2回目以降の発話が
         # どこにも保存されず**消えていた**（2026-10-21に発覚）。
-        # comment は required なので、1回目で埋まると flow.next_field が
-        # None を返し、保存先が無くなる
-        accumulate="comment",
+        # comment_org は required なので、1回目で埋まると flow.next_field が
+        # None を返し、保存先が無くなる。
+        #
+        # ⚠️ **ここが「全部入る」場所**（2026-10-26）。打ち込み・音声・caption が
+        # すべて comment_org に積まれる。base.py が並行して text_org /
+        # audio_stt_org にも振り分ける
+        accumulate="comment_org",
     )

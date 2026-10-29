@@ -463,7 +463,12 @@ async def build(page_id: str, teacher: Dict[str, Any], school_name: str) -> None
         await append(page_id, [h2(pl.label(pl.H_SESSIONS))])
         await make_view(
             c, page_id, ds_lsr, "My lesson study reflections", "gallery",
-            configuration=gallery_card(p_lsr, "Date"),
+            # ⚠️ **Comment_org を出す**（2026-10-26）。以前はタイトル
+            # （AIが作った Summary）と Date だけで、**先生が自分の言葉を
+            # カードから読めなかった。** Comment_org は原文なので
+            # 「先生が入れた言語でマイページを見られる」方針に合う。
+            # 英訳（Comment_eng）は分類の入力なので出さない
+            configuration=gallery_card(p_lsr, "Date", "Comment_org"),
             filter_=mine,
             sorts=[{"property": "Date", "direction": "descending"}],
         )

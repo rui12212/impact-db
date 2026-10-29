@@ -134,14 +134,22 @@ EXPECTED: Dict[str, Dict[str, Any]] = {
     "lesson_study_reflection": {
         "Summary": "title",
         "Lesson Study Reflection ID": "unique_id",
+        # 文字情報は**入力手段で分ける**（2026-10-26）
+        #   → modify/2026-10-26-lesson-study-text-audio-restructure.md
+        "Comment_org": "rich_text",      # 打ち込み＋音声＋caption の原文
+        "Text_org": "rich_text",         # そのうち打ち込みと caption だけ
+        "Audio_stt_org": "rich_text",    # そのうち音声の文字起こしだけ
+        "Comment_eng": "rich_text",      # Comment_org の英訳（分類の入力）
+        # ⚠️ 旧3つは**書き込まれないが Notion には残す。** 過去のレコードの
+        # 値が入っており、移行の参照元にもなる。削除は移行の確認後
         "Comment": "rich_text",
+        "STT_Km": "rich_text",
+        "Translated_En": "rich_text",
         "Date": "date",
         "Lesson Study": ("relation", "lesson_study"),
         "Teacher": ("relation", "user"),
         "School": ("relation", "school"),
         "Category": "select",
-        "STT_Km": "rich_text",
-        "Translated_En": "rich_text",
         "Audio": "files",
         "Image": "files",
         "Video": "files",

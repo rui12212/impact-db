@@ -181,7 +181,8 @@ def _() -> None:
 
     for name, module, key in (
         ("reflection", rf, '"note"'),
-        ("lesson_study", ls, '"comment"'),
+        # 2026-10-26 に comment → comment_org へ改名した
+        ("lesson_study", ls, '"comment_org"'),
     ):
         src = inspect.getsource(module)
         assert f"accumulate={key}" in src, f"{name} が accumulate を渡していない"
