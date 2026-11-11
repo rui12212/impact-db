@@ -297,7 +297,9 @@ async def onboard(inc: Incoming, user: Dict[str, Any]) -> None:
         updated = await user_repo.set_school(inc.telegram_id, school_id)
         if inc.message_id:
             await telegram.edit_message_text(
-                inc.chat_id, inc.message_id, updated.get("school_name") or ""
+                inc.chat_id,
+                inc.message_id,
+                await user_repo.display_school(updated),
             )
         await telegram.send_message(inc.chat_id, t("school_saved"))
         _ensure_mypage(inc, updated)

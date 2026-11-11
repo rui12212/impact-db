@@ -57,7 +57,8 @@ async def get_or_create_user(
 ) -> Dict[str, Any]:
     """先生の情報を返す。Redis にあればそれを使い、無ければ Notion を見る。
 
-    返す形: {"notion_page_id", "name", "role", "school_id", "school_name"}
+    返す形: {"notion_page_id", "name", "role", "mypage", "school_id"}
+    ⚠️ **学校名は入っていない。** 表示は display_school() を使う
     この辞書が user:{telegram_id} の中身そのもの（TTLなし）。
     """
     cached = session.get_user(telegram_id)
@@ -80,14 +81,19 @@ async def get_or_create_user(
         # notion_page_create.py が書き込む（まだ無ければ空）
         "mypage": _url(page, "Mypage"),
         "school_id": "",
-        "school_name": "",
     }
+
+    # ⚠️ **学校名はここに入れない**（2026-11-12）。TTLが無いので
+    # Notionでリネームしても古い名前が残り続ける。表示する時に
+    # display_school() がNotionから読む。
+    # 以前のキャッシュに残っている分は、ここで落とす
+    data.pop("school_name", None)
 
     member = await get_current_member(page["id"])
     if member:
-        school_id, school_name = await _school_of(member)
+        # 2つ目の戻り値（学校名）は使わない
+        school_id, _ = await _school_of(member)
         data["school_id"] = school_id
-        data["school_name"] = school_name
 
     session.set_user(telegram_id, data)
     return data
@@ -103,6 +109,24 @@ async def list_schools() -> List[Tuple[str, str]]:
 async def school_name(school_page_id: str) -> str:
     page = await retrieve_page(school_page_id)
     return _title(page, "School Name")
+
+
+async def display_school(user: Dict[str, Any]) -> str:
+    """画面に出す学校名。**キャッシュに持たず、その時にNotionを読む。**
+
+    ⚠️ **user:{telegram_id} に焼かないこと**（2026-11-12）。学校名は
+    Notionで変えられるのに、あのキーには TTL が無い。一度焼くと
+    `get_or_create_user` の早期リターンに当たり続けて、
+    **古い名前が永遠に出る。**
+
+    ⚠️ 紐付けは `school_id`（リレーション）でやっている。名前は
+    表示専用なので、読み直しても整合性の問題は起きない。
+
+    出している場所は設定画面と所属選択の直後だけ。どちらも滅多に
+    開かないので、ここで1回読むコストは問題にならない。
+    """
+    sid = user.get("school_id") or ""
+    return await school_name(sid) if sid else ""
 
 async def get_current_member(user_page_id: str) -> Optional[dict]:
     """在籍中の School Member レコード。End Date が空のものが在籍中。"""
@@ -145,6 +169,9 @@ async def set_school(
             return user
         await update_page(current["id"], {"End Date": {"date": {"start": _today()}}})
 
+    # ⚠️ ここで読む名前は **School Member の行の見出しに焼く用**。
+    # 履歴なので、その当時の学校名で残るのが正しい。
+    # キャッシュには入れない（display_school のコメント参照）
     sname = name or await school_name(school_page_id)
     await create_page(
         DB_SCHOOL_MEMBER,
@@ -157,7 +184,6 @@ async def set_school(
     )
 
     user["school_id"] = school_page_id
-    user["school_name"] = sname
     session.set_user(telegram_id, user)
     return user
 

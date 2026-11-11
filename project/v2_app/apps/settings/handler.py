@@ -102,9 +102,11 @@ async def _show_menu(inc: Incoming, user: Dict[str, Any]) -> None:
         [(_btn("btn_school"), MENU_SCHOOL)],
         [(_btn("btn_done"), MENU_DONE)],
     ]
+    # 学校名はキャッシュに持たない。ここでNotionから読む（2026-11-12）
+    school = await user_repo.display_school(user)
     head = (
         f"{t('menu')}\n\n"
-        f"{t('current')} {user.get('name', '')} / {user.get('school_name', '')}"
+        f"{t('current')} {user.get('name', '')} / {school}"
     )
     await telegram.send_message(
         inc.chat_id, head, reply_markup=telegram.inline_keyboard(rows)
@@ -147,7 +149,9 @@ async def handle(inc: Incoming, user: Dict[str, Any]) -> None:
             updated = await user_repo.set_school(inc.telegram_id, page_id)
             if inc.message_id:
                 await telegram.edit_message_text(
-                    inc.chat_id, inc.message_id, updated.get("school_name") or ""
+                    inc.chat_id,
+                    inc.message_id,
+                    await user_repo.display_school(updated),
                 )
             # set_school は同じ学校なら何もせず返す。「変えました」と出さない
             changed = updated.get("school_id", "") != before
