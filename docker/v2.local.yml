@@ -1,0 +1,103 @@
+# V2: ローカル開発用
+#
+# 実行はリポジトリルートから:
+#   docker compose -f docker/v2.local.yml up -d --build
+#
+# スクリプトを動かす:
+#   docker compose -f docker/v2.local.yml exec app \
+#     python project/v2_app/scripts/notion_db_create.py
+#
+# ⚠️ V1（portfolio-bot）がホストの 8000 を使っているため、V2は 8001 に割り当てる
+#
+# ⚠️ **参照する env は開発用（env/v2.dev.env）**（2026-10-21変更）。
+#    本番とは別の Notion（V2-DEV-ROOT-PAGE）を見る。
+#    本番の Notion を触る作業は docker/v2.prod.yml（サーバー上）だけにして、
+#    手元から本番に触る経路を無くす。
+#
+#    本番の env を手元で使う必要が出たら、その場で明示する:
+#      docker compose -f docker/v2.local.yml exec \
+#        -e V2_ENV_FILE=env/v2.prod.env app python -m ...
+name: impact-v2
+
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: impact-v2-app
+    env_file:
+      - ../env/v2.dev.env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app/project
+      - TZ=Asia/Phnom_Penh
+      # compose内のサービス名で解決する（env_file の値を上書き）
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      # コードをマウント（ホットリロード + スクリプトの変更が即反映される）
+      - ../project:/app/project
+      # スクリプトが /app/env/ 配下の env ファイルを読めるようにする
+      # （.dockerignore で env/ はイメージから除外しているため、実行時にマウントする）
+      - ../env:/app/env:ro
+      - ../.runtime:/app/.runtime
+    ports:
+      - "8001:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    # --reload-dir を指定しないと /app 配下すべてを監視してしまい、
+    # V1のコードやvenvの変更でも再起動がかかる
+    command: >
+      uvicorn v2_app.main:app --reload
+      --host 0.0.0.0 --port 8000
+      --reload-dir /app/project/v2_app
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # 手元を一時的に公開して、開発用Botの webhook を受けるためのトンネル。
+  #
+  # ⚠️ Telegram の webhook は**公開されたHTTPSのURLにしか送れない。**
+  #    手元の Docker は外から見えないので、トンネルで出す。
+  #
+  # cloudflared の「クイックトンネル」はアカウント登録が不要。
+  # URLは起動ごとに変わるので、scripts/dev_webhook.py が貼り替える:
+  #
+  #   docker compose -f docker/v2.local.yml up -d
+  #   python project/v2_app/scripts/dev_webhook.py
+  #
+  # 固定URLにしたくなったら「名前付きトンネル」に移す
+  # （cloudflared login + DNS設定で dev.gopal-tech.com など。webhookは1回だけ）
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    container_name: impact-v2-tunnel
+    # app の 8000 をそのまま出す（ホストの 8001 ではなく compose 内のポート）
+    command: tunnel --no-autoupdate --url http://app:8000
+    depends_on:
+      - app
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  redis:
+    image: redis:7-alpine
+    container_name: impact-v2-redis
+    # ローカル開発では永続化しない（消えても入力途中データだけ）
+    # 本番の永続化方針は未決定 → v2-todo.md B-10
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      # ホストから redis-cli で覗けるようにする
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped

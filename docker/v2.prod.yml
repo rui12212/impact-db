@@ -1,0 +1,116 @@
+# V2: 本番用（ConoHa VPS・V1と同居）
+#
+#   docker compose -f docker/v2.prod.yml up -d --build
+#
+# コードを更新する:
+#   git pull && docker compose -f docker/v2.prod.yml restart app
+#   （../project をマウントしているので再ビルドは不要。
+#    requirements.txt を変えた時だけ --build）
+#
+# 手順の全体 → .claude/topics/v2/v2-deploy.md
+#
+# ⚠️ V1（portfolio-bot）がホストの 8000 を使うため、V2は 8001
+# ⚠️ env/v2.prod.env は .gitignore 済み。clone しても来ないので手で作る
+name: impact-v2-prod
+
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: impact-v2-prod-app
+    env_file:
+      - ../env/v2.prod.env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app/project
+      # ⚠️ これが無いと date.today() がUTCの日付を返し、カンボジア時間
+      # 0:00〜7:00 の記録が前日として保存される（10/1朝6時 → 9月の集計）
+      - TZ=Asia/Phnom_Penh
+      # compose内のサービス名で解決する（env_file の値を上書き）
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      # コードをマウントする。git pull + restart でデプロイできる
+      - ../project:/app/project
+      # スクリプトが /app/env/v2.prod.env を読めるようにする
+      # （.dockerignore で env/ はイメージから除外しているため）
+      - ../env:/app/env:ro
+      # ⚠️ Chromaの埋め込みとバッチのログがここに入る。消すと
+      # 分類の初回が seed 70件の埋め込みからやり直しになる
+      - ../.runtime:/app/.runtime
+    ports:
+      # ⚠️ 127.0.0.1 に縛る。nginx 経由だけにして外から直接叩けないように
+      - "127.0.0.1:8001:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    # 本番では --reload を付けない（ファイル監視のCPUとメモリが無駄）。
+    #
+    # --proxy-headers: nginx の X-Forwarded-For を見て、ログに本当の
+    #   送信元IPを出す。付けないと全部 127.0.0.1 になる
+    #
+    # ワーカーは1つ。30人・ピーク0.16 req/秒 では増やす意味がない。
+    # 増やすなら Redis が前提（状態はRedisにあるので満たしている）→ P-2
+    command: >
+      uvicorn v2_app.main:app
+      --host 0.0.0.0 --port 8000
+      --proxy-headers --forwarded-allow-ips='*'
+    # 保存処理は BackgroundTasks で動くので、止める時に少し待つ。
+    # ⚠️ 完全な保証ではない（uvicorn は BackgroundTasks の完了を待たない）。
+    # デプロイは先生が使っていない時間にやる
+    stop_grace_period: 30s
+    healthcheck:
+      # curl をイメージに入れていないので python で叩く
+      test:
+        - CMD
+        - python
+        - -c
+        - |
+          import sys, urllib.request
+          try:
+              r = urllib.request.urlopen("http://localhost:8000/healthz", timeout=3)
+              sys.exit(0 if r.status == 200 else 1)
+          except Exception:
+              sys.exit(1)
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  redis:
+    image: redis:7-alpine
+    container_name: impact-v2-prod-redis
+    # ⚠️ ホストにポートを出さない。アプリからは compose の
+    # ネットワーク越しに redis:6379 で届く
+    #
+    # 永続化は未決定 → v2-todo.md B-10
+    # いまは永続化しない。落ちて消えるのは「入力途中のデータ」だけで、
+    # 保存済みの記録はNotionにある。先生は書き直しになる。
+    #
+    # 永続化するなら下に差し替えて volumes を有効にする:
+    #   command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # 永続化する場合に有効にする
+    # volumes:
+    #   - redis-data:/data
+
+# volumes:
+#   redis-data:

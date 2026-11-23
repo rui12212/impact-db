@@ -1,0 +1,333 @@
+"""音声の言語判定・文字起こし・英訳。V2側で持つ。
+
+→ modify/2026-10-20-japanese-input-language-design.md
+
+**なぜ V1 を使わないか。** V1（`core/audio/stt_translate.py`）は
+クメール語を決め打ちしている。
+
+    :369  "...verbatim in the language spoken (Khmer)."
+    :404  detect_language は 'km' / 'en' しか返さず、**日本語は km に丸める**
+    :385  translate_gemini_km_to_en はクメール語→英語で固定
+
+日本語に対応するには直す必要があるが、**V1 は本番と共用しているので
+触らない**。ここは V2 専用の経路として作り、V1 からは
+「音声の前処理」「チャンク分割」「使用量カウント」だけを借りる。
+
+⚠️ **タイムスタンプを付けない。** V1は `[00:00-00:30]` を付けるので
+   `stt.clean_transcript` が正規表現で落としていた。付けて落とすより
+   最初から付けないほうが確実（本文中のコロンを誤って切る危険も消える）。
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import shutil
+from typing import List, Optional, Tuple
+
+from v2_app.core import lang as lang_mod
+
+log = logging.getLogger("impactdb.v2")
+
+MODEL = "gemini-2.5-flash"
+
+# 1チャンクの長さ。
+# ⚠️ 30秒（V1と同じ）→ 5分にした（2026-11-23）。30秒では**文の途中で
+# 切れて文脈が断たれ**、短い断片ほど言語を誤る。
+# 前処理の出力は 16kHz mono PCM16 = 32KB/s なので、5分で約9.6MB。
+# Gemini の inline_data の上限（約20MB）に収まる。**これ以上伸ばさない**
+CHUNK_MS = 300_000
+
+# ⚠️ 1.5秒 → 0 にした（2026-11-23）。重複させた分を**除去する処理が無く、
+# 境界の1.5秒がそのまま二重に出力されていた**
+# （core/audio/stt_chunking.py の `s = e - overlap_ms`）
+OVERLAP_MS = 0
+
+DETECT_PROMPT = (
+    "Listen to this audio and identify the language. "
+    "Reply with ONLY one of these codes and nothing else: "
+    "'km' for Khmer/Cambodian, 'en' for English, 'ja' for Japanese. "
+    "If you are unsure, reply 'km'."
+)
+
+
+_client_cache = None
+
+
+def _client():
+    """Gemini のクライアント。**1つ作って使い回す。**
+
+    ⚠️ 毎回 `genai.Client()` を作ると、2回目以降が
+    **`Cannot send a request, as the client has been closed`** で落ちる
+    （2026-10-22に実機で発生）。SDKが内部のHTTPクライアントを共有して
+    いるため、前のクライアントが回収されると共有分まで閉じられる。
+
+    1件の音声で判定1回＋チャンクごとの文字起こし＋英訳と**何回も呼ぶ**
+    ので、ここは必ず使い回す。
+    """
+    global _client_cache
+
+    if _client_cache is not None:
+        return _client_cache
+
+    from google import genai
+
+    key = os.getenv("GEMINI_API_KEY")
+    if not key:
+        raise RuntimeError("GEMINI_API_KEY is not set")
+
+    _client_cache = genai.Client(api_key=key)
+    return _client_cache
+
+
+# クライアントが閉じられた時にSDKが出す文字列
+_CLOSED = "client has been closed"
+
+
+def _generate(**kwargs):
+    """Gemini を呼ぶ。**閉じられていたら作り直して1回だけやり直す。**
+
+    ⚠️ 使い回しの弱点を埋める。一度閉じられると、作り直さない限り
+    **以降すべての音声が失敗し、プロセスを再起動するまで直らない。**
+    ここで拾えば先生からは何も起きていないように見える。
+
+    やり直しは1回だけ。何度も繰り返すと、本当に落ちている時に
+    Geminiの使用量だけが増える。
+    """
+    global _client_cache
+
+    try:
+        return _client().models.generate_content(**kwargs)
+    except Exception as e:
+        if _CLOSED not in str(e):
+            raise
+        log.warning("Geminiのクライアントが閉じられていた。作り直して再試行")
+        _client_cache = None
+        return _client().models.generate_content(**kwargs)
+
+
+def _prepare(file_path: str) -> Tuple[List[tuple], str]:
+    """音声を wav にして30秒ごとに切る。**V1の部品をそのまま借りる。**
+
+    返すのは (チャンク, 前処理後のwavのパス)。wav のパスも返すのは
+    **あとで消すため**（→ `_cleanup`）。
+
+    ⚠️ **重い。** 中では音声全体に対してノイズ低減・バンドパス・EQ・
+    正規化・VAD が走る。1件の音声につき**1回だけ**呼ぶこと
+    （2026-10-26まで detect_lang と transcribe が別々に呼んでいて、
+    同じ処理が2回走っていた）
+    """
+    from core.audio.audio_preprocess import preprocess_for_stt
+    from core.audio.stt_chunking import split_wav_to_chunks
+
+    wav = preprocess_for_stt(file_path)
+    chunks = split_wav_to_chunks(wav, chunk_ms=CHUNK_MS, overlap_ms=OVERLAP_MS)
+    return chunks, wav
+
+
+def _chunks(file_path: str) -> List[tuple]:
+    """チャンクだけ欲しい時の入口。**後片付けができないので run では使わない。**"""
+    chunks, _wav = _prepare(file_path)
+    return chunks
+
+
+def _cleanup(chunks: List[tuple], wav: str = "") -> None:
+    """一時ファイルを消す。
+
+    ⚠️ **V1 の部品は一時ファイルを消さない。** `split_wav_to_chunks` は
+    チャンクごとに `mkdtemp()` し、`preprocess_for_stt` も `mkdtemp()` する。
+    消さないと**5分の音声1本で約20MBがコンテナに残り続ける**。
+    `/tmp` は再起動で消えるので、デプロイ頻度に救われていた。
+
+    ⚠️ **1つだけ消せないものが残る。** `preprocess_for_stt` が内部で作る
+    16kHz変換後の wav（`_to_wav16k_mono` の出力）はパスが返ってこない。
+    消すには V1 の `audio_preprocess.py` を直す必要があるため見送った
+    （V1本番と共用）。
+
+    失敗しても例外にしない。後片付けで記録を落とさない。
+    """
+    paths = [c[0] for c in chunks]
+    if wav:
+        paths.append(wav)
+
+    for path in paths:
+        try:
+            shutil.rmtree(os.path.dirname(path), ignore_errors=True)
+        except Exception:
+            log.warning("一時ファイルを消せなかった: %s", path)
+
+
+def _quota() -> None:
+    """Gemini の使用量を数える。**V1と同じカウンタを使う**（月の上限を共有）。"""
+    from core.gemini_quota import check_and_increment
+
+    check_and_increment()
+
+
+def detect_lang(file_path: str, chunks: Optional[List[tuple]] = None) -> str:
+    """音声の言語。'km' / 'en' / 'ja'。判定できなければ既定（km）。
+
+    **最初のチャンクだけ**を聞く。全部聞く必要が無く、呼び出しも増える。
+
+    `chunks` を渡せば分割をやり直さない。**`_prepare` は重いので、
+    run() のように続けて transcribe も呼ぶ場合は必ず渡す。**
+    """
+    chunks = chunks if chunks is not None else _chunks(file_path)
+    if not chunks:
+        log.warning("チャンクが作れないので言語は既定にする")
+        return lang_mod.DEFAULT
+
+    first_path = chunks[0][0]
+    _quota()
+
+    with open(first_path, "rb") as f:
+        audio = f.read()
+
+    res = _generate(
+        model=MODEL,
+        contents=[
+            DETECT_PROMPT,
+            {"inline_data": {"data": audio, "mime_type": "audio/wav"}},
+        ],
+    )
+
+    # ⚠️ 'Japanese' や 'ja-JP' で返ってくることがあるので正規化を通す
+    code = lang_mod.normalize(getattr(res, "text", ""))
+    if not code:
+        log.warning("言語を判定できなかった: %r", getattr(res, "text", "")[:40])
+        return lang_mod.DEFAULT
+
+    log.info("音声の言語: %s", code)
+    return code
+
+
+def transcribe(
+    file_path: str, chunks: Optional[List[tuple]] = None
+) -> str:
+    """**話されている言語のまま**文字起こしする。
+
+    ⚠️ **言語を指定しない**（2026-11-23変更）。以前は detect_lang が
+    最初の30秒で決めた1言語を全体に強制していたため、**クメール語と
+    英語が混ざった音声で後半が崩れていた。** Gemini が「この音声は
+    英語です」と文句を返す例も実在した（core/stt.py のコメント）。
+    混ざっていれば**混ざったまま**返る。
+
+    英語への統一は**英訳側（translate_to_en）が担う。** ここは
+    原語のまま残すのが役割。
+
+    `chunks` を渡せば分割をやり直さない（`_prepare` は重い）。
+    """
+
+    prompt = (
+        "Please transcribe the content of this audio verbatim, "
+        "in whatever language is actually spoken. "
+        "If more than one language is spoken, transcribe each part "
+        "in its own original language. "
+        "Do NOT translate anything. "
+        "Output ONLY the transcription. "
+        "Do not add timestamps, headings, notes or any preamble."
+    )
+
+    parts: List[str] = []
+    for chunk_path, _start, _end in (
+        chunks if chunks is not None else _chunks(file_path)
+    ):
+        _quota()
+        with open(chunk_path, "rb") as f:
+            audio = f.read()
+
+        res = _generate(
+            model=MODEL,
+            contents=[
+                prompt,
+                {"inline_data": {"data": audio, "mime_type": "audio/wav"}},
+            ],
+        )
+        text = (getattr(res, "text", "") or "").strip()
+        if text:
+            parts.append(text)
+
+    return "\n".join(parts).strip()
+
+
+def translate_to_en(text: str) -> str:
+    """英訳する。8分類が英語を要求するため（core/categorize.py）。
+
+    ⚠️ **英語でも呼ぶ**（2026-11-23変更）。以前は「英語なら呼ばない／
+    短絡する」としていたが、**混在音声では最初の30秒が英語と判定された
+    だけで残りのクメール語が訳されないまま**返っていた。
+    ルール1が英語をそのまま残すので、全文を通して問題ない。
+
+    ⚠️ **言語を判定しない**（2026-10-26）。渡ってくるのは打ち込みと
+    音声の文字起こしを繋いだ文で、**日本語とクメール語が混ざりうる。**
+    `lang.guess_from_text` では決められないので、**プロンプト側で
+    「英語はそのまま／英語以外を訳す」を指示して判定自体を無くす。**
+
+    ⚠️ **要約させない。** 用途が「1発話を訳す」から「蓄積された全文を
+    訳して分類に渡す」に変わった（Comment_eng）。`professional
+    interpreter` と `natural English` だけでは言い換えや整形が入り、
+    **埋め込みの近傍が変わって分類がぶれる。**
+    """
+    if not text.strip():
+        return ""
+    # ⚠️ **英語判定による短絡を置かない**（2026-11-23削除）。最初の30秒が
+    # 英語だと判定されると**残りのクメール語が訳されないまま**返っていた。
+    # 分類は英語を要求するので（core/stt.py:158-162）、混在音声の
+    # 分類精度が落ちる経路になっていた。ルール1が英語をそのまま残す
+
+    from google.genai import types
+
+    _quota()
+    res = _generate(
+        model=MODEL,
+        config=types.GenerateContentConfig(
+            system_instruction=(
+                "You are a professional translator. "
+                "Return the text under these rules:\n"
+                "1. Do NOT change anything already written in English.\n"
+                "2. Translate everything written in another language "
+                "into English.\n"
+                "3. Do NOT summarize or omit anything. Even if the text does "
+                "not read well as a whole, do not alter the meaning of each "
+                "sentence.\n"
+                "4. Keep the exact original order.\n"
+                "Output ONLY the result, with no preamble."
+            ),
+        ),
+        contents=[text],
+    )
+    return (getattr(res, "text", "") or "").strip()
+
+
+def run(file_path: str) -> tuple:
+    """音声 → (原文, 英訳, "")。
+
+    ① 文字起こし（**話されている言語のまま**）→ ② 英訳
+
+    Gemini の呼び出しは **チャンク数（文字起こし）＋1（英訳）**。
+    5分までの音声なら **2回**で済む。
+    同期処理なので、呼ぶ側で別スレッドに逃がす（core/stt.py）。
+
+    ⚠️ **detect_lang は呼ばない**（2026-11-23変更）。
+    ① 文字起こしで言語を指定しない ② 英訳の短絡をやめた
+    の2つで、判定結果の使い道が無くなった。呼び出し側も捨てている
+    （core/stt.py:101 の `_code`）。返り値の3番目は常に `""`。
+    🔴 5分チャンクでは**判定だけで 9.6MB 送ることになる。**
+    関数自体は stt.detect_lang として残してある（別用途のため）。
+
+    ⚠️ **前処理と分割は1回だけ**（2026-10-26変更）。以前は detect_lang と
+    transcribe がそれぞれ `_chunks()` を呼んでいたので、**重いDSP処理が
+    2回走り、一時ファイルも2倍残っていた**。
+    """
+    chunks, wav = _prepare(file_path)
+    try:
+        original = transcribe(file_path, chunks=chunks)
+        if not original:
+            # ⚠️ 3つ返す。transcribe_with_lang が3つで受けている
+            return "", "", ""
+
+        english = translate_to_en(original)
+        return original, english, ""
+    finally:
+        # ⚠️ **必ず消す。** 消さないと5分の音声1本で約20MB残る
+        _cleanup(chunks, wav)
