@@ -8,6 +8,7 @@ load_dotenv()
 
 # Notion Related
 import os
+from pathlib import Path
 
 GOOGLE_APPLICATION_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL")
