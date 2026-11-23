@@ -13,6 +13,20 @@ from v2_app.core.config import DB_DAILY_LEARNING
 
 DB_ID = DB_DAILY_LEARNING
 
+# モードに入った直後に出す文（2026-11-23追加）。
+# menu.py が「Now you are on 〜」と**同じ1通**にまとめて送り、
+# その1通で Start ボタンも消す（リプライキーボードはメッセージに
+# 添えてしか操作できないため）。
+#
+# 🔴 **`note` の question とは別物。question は消さない。**
+# あれは写真だけ送られた時などの**聞き直し**に使われる
+# （base.py:754 / ask.py:147）。消すと聞き直しが無言になる
+OPENING: Dict[str, str] = {
+    "en": "Please send me your learnings.",
+    # 仮訳（開発側）。§11 の対照表が届いたら差し替える
+    "km": "សូមផ្ញើការរៀនសូត្ររបស់អ្នកមកខ្ញុំ។",
+}
+
 FIELDS: List[Dict[str, Any]] = [
     {
         "key": "note",

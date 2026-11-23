@@ -44,7 +44,12 @@ class _SkipAI(Exception):
 _background: set = set()
 
 TEXTS: Dict[str, Dict[str, str]] = {
-    "saved": {"en": "Saved. Thank you.", "km": "បានរក្សាទុក។ អរគុណ។"},
+    "saved": {"en": "Saved. Thank you.", "km": "បានរក្សាទុក។ អរគុណ។",},
+    "record_ready": {
+        "en": "Your record is ready.",
+        # 仮訳（開発側）。§11 の対照表が届いたら差し替える
+        "km": "កំណត់ត្រារបស់អ្នករួចរាល់ហើយ។",
+    },
     "save_failed": {"en": "Could not save. Please try again.", "km": "មិនអាចរក្សាទុកបានទេ។ សូមព្យាយាមម្តងទៀត។"},
     "in_progress": {"en": "Still saving. Please wait.", "km": "កំពុងរក្សាទុក។ សូមរង់ចាំ។"},
     "keep_going": {"en": "Please tell me more.", "km": "សូមប្រាប់ខ្ញុំបន្ថែម។"},
@@ -64,7 +69,18 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "km": "សូមផ្ញើរូបថត ឬវីដេអូឥឡូវនេះ។",
     },
     "media_failed": {"en": "Could not read that file.", "km": "មិនអាចអានឯកសារនោះបានទេ។"},
-    "confirm_head": {"en": "Is this correct?", "km": "តើនេះត្រឹមត្រូវទេ?"},
+    # 確認カードの1行目。
+    #
+    # ⚠️ **「Is this correct?」をやめた**（2026-11-23）。記録の中身を
+    # ここで直す手段が無いので、「正しいか」を聞いても先生は答えようが
+    # ない。ボタンは [Save] [Add more] なので、**聞くべきは「追加するか」**
+    "confirm_head": {
+        "en": "Will you save or add more information?",
+        # 仮訳（開発側）。§11 の対照表が届いたら差し替える。
+        # 「保存する」「追加する」はボタンの文言（btn_save / btn_more）と
+        # 同じ語を使う。別の語にすると、どちらを押せばよいか分からなくなる
+        "km": "តើអ្នកនឹងរក្សាទុក ឬបន្ថែមព័ត៌មានទៀត?",
+    },
     # 打ち込んだ直後に必ず出す。LLMに5〜10秒、音声の文字起こしには
     # 50秒かかるので、何も出ないと先生は待っているのか分からない。
     # 返信を送る直前に消す
@@ -536,6 +552,10 @@ async def handle(
     use_llm: bool = True,
     followup: bool = True,
     accumulate: str = "",
+    # モードに入った直後の1通をここで出すか（2026-11-23追加）。
+    # False にするモードは **menu.py が「Now you are on 〜」と
+    # まとめて出している**（Start ボタンの除去もそこで済んでいる）
+    greet: bool = True,
 ) -> None:
     """3モードが共有する会話ループ。
 
@@ -597,10 +617,19 @@ async def handle(
     # ⚠️ ここでLLMを呼ばない。会話が無いので適応する材料が無く、
     # schema.py の固定の質問と変わらない。10秒待たせる意味がない
     if not text and not inc.has_media:
+        # ⚠️ **menu.py が入り口の1通を出すモードは、ここでは出さない**
+        # （2026-11-23追加）。出すと吹き出しが2つになる。
+        # Start ボタンの除去も menu.py の1通で済んでいる
+        if not greet:
+            return
         opening = _static_question(fields, _filled(route, inc.telegram_id))
         if opening:
             session.append_history(route, inc.telegram_id, "assistant", opening)
-            await telegram.send_message(inc.chat_id, opening)
+            await telegram.send_message(
+                inc.chat_id,
+                opening,
+                reply_markup=telegram.remove_reply_keyboard(),
+            )
         return
 
     # ⚠️ 写真を複数枚送ると1枚ずつ別メッセージで届き、**並行して処理される。**
@@ -634,14 +663,26 @@ async def handle(
                     ]
                 else:
                     # 写真はもう聞いた（または聞く項目が無い）。
-                    # 深掘りの固定文を出して、保存もできるようにする。
+                    # ここは**2本目以降の音声**で踏む。
                     #
                     # ⚠️ Add more も出す（2026-10-22 ユーザー要望）。
                     # Save だけだと「まだ話したいことがある」先生の行き先が無い
-                    question = f"{ask.FOLLOWUP_EN}\n{ask.FOLLOWUP_KM}"
-                    session.append_history(
-                        route, inc.telegram_id, "assistant", question
-                    )
+                    #
+                    # 🔴 **掛け合いをしないモードでは深掘り文を出さない**
+                    # （2026-11-23。§12 で掛け合いなしに決定）。文字の経路は
+                    # followup=False で止まるが、**音声はこの分岐で return
+                    # するので ask.make_question を通らず、ここを直さないと
+                    # 固定文だけが残る。**
+                    #
+                    # ⚠️ 文を空にはできない。Telegram はテキスト無しの
+                    # メッセージを送れず、**ボタンごと消えて保存経路が無くなる**
+                    if followup:
+                        question = f"{ask.FOLLOWUP_EN}\n{ask.FOLLOWUP_KM}"
+                        session.append_history(
+                            route, inc.telegram_id, "assistant", question
+                        )
+                    else:
+                        question = t("confirm_head")
                     rows = [
                         [(_btn("btn_save"), SAVE), (_btn("btn_more"), MORE)]
                     ]
@@ -883,6 +924,7 @@ async def _save_background(
     保存ボタンを押せるようにするため。「保存しました」と伝えた後に
     失敗したので、**必ず伝える。**
     """
+    ok = False
     try:
         # ⚠️ **文字起こしの完了を待つ。** 先生はもう「Saved」を受け取って
         # いるので、ここで待っても待たせていない。飛ばすと
@@ -952,10 +994,30 @@ async def _save_background(
                 log.exception("Slack投稿に失敗")
 
         session.clear_session(route, inc.telegram_id)
+        ok = True
 
     except Exception:
         log.exception("保存に失敗 route=%s", route)
-        # セッションは残す。もう一度押せるように
-        await telegram.send_message(inc.chat_id, t("save_failed_later"))
+
     finally:
         session.release_lock("save", inc.telegram_id)
+        await _finish_notice(inc, user, ok=ok)
+
+async def _finish_notice(inc: Incoming, user: Dict[str, Any],*, ok: bool) -> None:
+# startボタンを戻す
+# MyPageのURLを示す
+
+  from v2_app.router import menu
+  if ok:
+    current = session.get_user(inc.telegram_id) or user
+    url = current.get("mypage") or ""
+    text = t("record_ready")
+
+    if url:
+      text = f"{text}\n\n{url}"
+  else:
+    text = t("save_failed_later")
+
+  await telegram.send_message(
+        inc.chat_id, text, reply_markup=menu.start_keyboard()
+  )

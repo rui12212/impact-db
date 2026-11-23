@@ -59,6 +59,11 @@ def _load() -> Dict[str, Dict[str, Any]]:
             "handler": _placeholder(route),
             "db_id": "",
             "ready": False,
+            # モードに入った直後に出す文（2026-11-23追加）。menu.py が
+            # 「Now you are on 〜」と同じ1通にまとめて送る。
+            # 持たないモードは None のまま（従来どおり、入り口の1通は
+            # base.py が最初の必須項目の question で出す）
+            "opening": None,
         }
 
         try:
@@ -83,6 +88,7 @@ def _load() -> Dict[str, Dict[str, Any]]:
             handler=handler,
             db_id=getattr(mod, "DB_ID", ""),
             ready=True,
+            opening=getattr(mod, "OPENING", None),
         )
         routes[route] = entry
 

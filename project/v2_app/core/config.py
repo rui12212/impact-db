@@ -72,6 +72,28 @@ R2_FOLDER = _get("R2_FOLDER")
 R2_PUBLIC_URL_BASE = _get("R2_PUBLIC_URL_BASE")
 
 
+# --- 文字起こしのプロバイダ（2026-11-23）---
+#
+# "gemini"（既定）/ "eleven"。**実機で両方を比べるための切り替え。**
+# クメール語には信頼できる公開ベンチマークが無く（WER は単語の区切りが
+# 無い言語で意味を持たない）、自前で測るしかないため。
+# → .claude/topics/v3/transcribe-llm.md
+#
+# ⚠️ **英訳は常に Gemini。** ElevenLabs は文字起こしだけで翻訳をしない。
+# 2社にまたがる構成になるのは意図的。
+#
+# ⚠️ **REQUIRED には入れない。** Slack と同じ理由で、既定の "gemini" では
+# ElevenLabs の鍵が要らない。入れると既定の構成で起動しなくなる。
+# 鍵の確認は stt_eleven.py が使う時にだけ行う
+STT_PROVIDER = _get("V2_STT_PROVIDER", "gemini")
+
+# ElevenLabs（STT_PROVIDER = "eleven" の時だけ使う）。
+# scribe_v3 は 2026-11-10 リリース。⚠️ SDK（elevenlabs==2.27.0）が
+# このIDを知らない可能性があるので、環境変数で下げられるようにしてある
+ELEVENLABS_API_KEY = _get("ELEVENLABS_API_KEY")
+ELEVENLABS_STT_MODEL = _get("ELEVENLABS_STT_MODEL", "scribe_v3")
+
+
 # --- Slack（Bot Token方式。2026-10-09決定）---
 SLACK_BOT_TOKEN = _get("V2_SLACK_BOT_TOKEN")
 

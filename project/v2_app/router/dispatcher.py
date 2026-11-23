@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
 from v2_app.core import session, telegram, user_repo
+from dataclasses import dataclass, field, replace
 
 log = logging.getLogger("impactdb.v2")
 
@@ -149,6 +150,10 @@ async def handle_update(update: Dict[str, Any]) -> None:
     # 遅延 import。router → apps → core の向きだけにして循環を避ける
     from v2_app.apps import registry
     from v2_app.router import menu
+
+    if inc.kind == "text" and menu.is_start_button(inc.text):
+            log.info("[2] Start ボタン -> /new に読み替え")
+            inc = replace(inc, text = "/new")
 
     # コマンドは route より優先する。どこで詰まっても抜け出せるように
     if inc.kind == "text" and inc.text.startswith("/"):

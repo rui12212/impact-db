@@ -85,8 +85,9 @@ async def transcribe(file_path: str) -> Tuple[str, str]:
     """音声ファイル → (原文の文字起こし, 英訳)。
 
     ⚠️ **原文はクメール語に限らない**（2026-10-21変更）。
-    `core/stt_gemini.py` が音声の言語を判定し、その言語で起こす。
-    日本語の音声なら日本語が返る。
+    `core/stt_gemini.py` は**話されている言語のまま**起こすので、
+    日本語の音声なら日本語が返り、**クメール語と英語が混ざっていれば
+    混ざったまま**返る（2026-11-23変更。言語の判定と強制をやめた）。
 
     V1の decide_transcribe_model は使わない。あれは
     プロンプトに `(Khmer)` と決め打ちしていて、日本語で結果が
@@ -103,15 +104,30 @@ async def transcribe(file_path: str) -> Tuple[str, str]:
 
 
 async def transcribe_with_lang(file_path: str) -> Tuple[str, str, str]:
-    """音声ファイル → (原文, 英訳, 判定した言語)。
+    """音声ファイル → (原文, 英訳, 言語コード)。
 
-    言語も知りたい呼び出し側のため（Botの返事を何語にするか等）。
+    ⚠️ 3番目は**常に空文字**（2026-11-23変更）。言語の判定をやめたため。
+    返り値の形だけ残してある（呼び出し側が3つで受けている）。
+
+    ⚠️ **プロバイダを切り替えられる**（2026-11-23追加）。
+    `V2_STT_PROVIDER` = "gemini"（既定）/ "eleven"。
+    クメール語の公開ベンチマークが無く**実機で比べるしかない**ため。
+    **戻すのは環境変数1つ。** → .claude/topics/v3/transcribe-llm.md
     """
-    from v2_app.core import stt_gemini
+    from v2_app.core import config
+
+    if config.STT_PROVIDER == "eleven":
+        from v2_app.core import stt_eleven as provider
+    else:
+        from v2_app.core import stt_gemini as provider
+
+    # 🔴 **必ず残す。** どちらで起こしたかがログに無いと、
+    # 実機で結果を見た時にどちらの結果なのか分からなくなる
+    log.info("文字起こしのプロバイダ: %s", config.STT_PROVIDER)
 
     try:
         original, english, code = await asyncio.to_thread(
-            stt_gemini.run, file_path
+            provider.run, file_path
         )
     except Exception as e:
         log.warning("transcribe failed: %s", e)

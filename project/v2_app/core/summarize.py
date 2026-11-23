@@ -90,14 +90,10 @@ Example:
 """
 
 
-SYSTEM_SLACK = """You summarize a teacher's reflection for a team channel.
-
-Rules:
-- Reply in the SAME language as the input.
-- One or two short sentences. Keep the teacher's own wording where you can.
-- State what happened and what they plan to try next, if written.
-- Do NOT evaluate. Do NOT praise. Do NOT add advice.
-"""
+# ⚠️ **SYSTEM_SLACK は削除した**（2026-11-23 / 11-16 ミーティング §4・§9）。
+# Slack には要約を出さず、先生が書いた原文をそのまま流す。
+# 要1（Notion の見出し）・要2（キーワード）とは別の判断なので、
+# それらは残っている
 
 KEYWORDS_SCHEMA: Dict[str, Any] = {
     "type": "object",
@@ -197,30 +193,24 @@ async def make_slack_text(
     head: str = "",
     model: Optional[str]=None
 ) -> Optional[str]:
-  """Slackに流す1通。先生の名前 + 要約。
+    """Slackに流す1通。先生の名前 ＋ **先生が書いた原文**。
 
-  head を渡すと1行目を差し替えられる。授業研究で
-  「どの会へのコメントか」を出すため（2026-10-13）。
-  """
-  body = _main_text(fields, filled)
-  if not body:
-    return None
-  
-  try:
-    summary = await complete_text(
-        SYSTEM_SLACK,
-        body,
-        max_tokens=300,
-        temperature=0.3,
-        model=model or MODEL_ASK,
-    )
-  except Exception:
-    return None
+    ⚠️ **要約をやめた**（2026-11-23決定 / 11-16 ミーティング §4）。
+    Slack は**先生がいちばん目にする場所**なので、ここに AI の要約が
+    あると「自分の書いた文章と違う」が最も強く出る。
+    原文を出せば、その不快は原理的に起きない。
 
-  if not summary:
-    return None
-  
-  return f"{head or f'{teacher_name} has put the record!'}\n{summary}"
+    🔴 **`async` と `model` は残す。** 呼び出し側（apps/base.py）が
+    await しており、引数も渡している。消すとそちらも直すことになる。
+
+    head を渡すと1行目を差し替えられる。授業研究で
+    「どの会へのコメントか」を出すため（2026-10-13）。
+    """
+    body = _main_text(fields, filled)
+    if not body:
+        return None
+
+    return f"{head or f'{teacher_name} has put the record!'}\n{body}"
 
 def _main_text(fields: List[flow.Field], filled:Dict[str,Any]) -> str:
     for f in flow.asked_fields(fields):

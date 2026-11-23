@@ -253,6 +253,17 @@ def inline_keyboard(rows: List[List[tuple]]) -> dict:
         ]
     }
 
+# --- リプライキーボード -------------------------------------------------------
+def reply_keyboard(rows: List[List[str]]) -> dict:
+    return {
+        "keyboard": [[{"text": label}for label in row] for row in rows],
+        "resize_keyboard": True,
+        "is_persistent": False,
+        "one_time_keyboard": False, 
+    }
+
+def remove_reply_keyboard() -> dict:
+    return {"remove_keyboard": True}
 
 # --- webhook 登録（スクリプトから呼ぶ）--------------------------------
 

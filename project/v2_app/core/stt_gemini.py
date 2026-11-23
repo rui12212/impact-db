@@ -31,9 +31,17 @@ log = logging.getLogger("impactdb.v2")
 
 MODEL = "gemini-2.5-flash"
 
-# 1チャンクの長さ。V1と同じ
-CHUNK_MS = 30_000
-OVERLAP_MS = 1_500
+# 1チャンクの長さ。
+# ⚠️ 30秒（V1と同じ）→ 5分にした（2026-11-23）。30秒では**文の途中で
+# 切れて文脈が断たれ**、短い断片ほど言語を誤る。
+# 前処理の出力は 16kHz mono PCM16 = 32KB/s なので、5分で約9.6MB。
+# Gemini の inline_data の上限（約20MB）に収まる。**これ以上伸ばさない**
+CHUNK_MS = 300_000
+
+# ⚠️ 1.5秒 → 0 にした（2026-11-23）。重複させた分を**除去する処理が無く、
+# 境界の1.5秒がそのまま二重に出力されていた**
+# （core/audio/stt_chunking.py の `s = e - overlap_ms`）
+OVERLAP_MS = 0
 
 DETECT_PROMPT = (
     "Listen to this audio and identify the language. "
@@ -194,19 +202,28 @@ def detect_lang(file_path: str, chunks: Optional[List[tuple]] = None) -> str:
 
 
 def transcribe(
-    file_path: str, code: str, chunks: Optional[List[tuple]] = None
+    file_path: str, chunks: Optional[List[tuple]] = None
 ) -> str:
-    """判定した言語で文字起こしする。
+    """**話されている言語のまま**文字起こしする。
 
-    ⚠️ **言語を決め打ちしない。** V1は `(Khmer)` と書いていたので、
-    日本語の音声で結果が保証できなかった。
+    ⚠️ **言語を指定しない**（2026-11-23変更）。以前は detect_lang が
+    最初の30秒で決めた1言語を全体に強制していたため、**クメール語と
+    英語が混ざった音声で後半が崩れていた。** Gemini が「この音声は
+    英語です」と文句を返す例も実在した（core/stt.py のコメント）。
+    混ざっていれば**混ざったまま**返る。
 
-    `chunks` を渡せば分割をやり直さない（→ `detect_lang`）。
+    英語への統一は**英訳側（translate_to_en）が担う。** ここは
+    原語のまま残すのが役割。
+
+    `chunks` を渡せば分割をやり直さない（`_prepare` は重い）。
     """
-    language = lang_mod.name(code)
+
     prompt = (
-        f"Please transcribe the content of this audio verbatim in {language}. "
-        "Translation is not required. "
+        "Please transcribe the content of this audio verbatim, "
+        "in whatever language is actually spoken. "
+        "If more than one language is spoken, transcribe each part "
+        "in its own original language. "
+        "Do NOT translate anything. "
         "Output ONLY the transcription. "
         "Do not add timestamps, headings, notes or any preamble."
     )
@@ -233,12 +250,13 @@ def transcribe(
     return "\n".join(parts).strip()
 
 
-def translate_to_en(text: str, code: Optional[str] = None) -> str:
+def translate_to_en(text: str) -> str:
     """英訳する。8分類が英語を要求するため（core/categorize.py）。
 
-    ⚠️ **英語の音声では呼ばない**（2026-10-21決定）。既に英語なので
-    Gemini を1回節約できる。呼び出し側で判断する
-    （`lang.guess_from_text` は文字種を数えるだけでLLMを使わない）。
+    ⚠️ **英語でも呼ぶ**（2026-11-23変更）。以前は「英語なら呼ばない／
+    短絡する」としていたが、**混在音声では最初の30秒が英語と判定された
+    だけで残りのクメール語が訳されないまま**返っていた。
+    ルール1が英語をそのまま残すので、全文を通して問題ない。
 
     ⚠️ **言語を判定しない**（2026-10-26）。渡ってくるのは打ち込みと
     音声の文字起こしを繋いだ文で、**日本語とクメール語が混ざりうる。**
@@ -252,8 +270,10 @@ def translate_to_en(text: str, code: Optional[str] = None) -> str:
     """
     if not text.strip():
         return ""
-    if lang_mod.normalize(code) == "en":
-        return text
+    # ⚠️ **英語判定による短絡を置かない**（2026-11-23削除）。最初の30秒が
+    # 英語だと判定されると**残りのクメール語が訳されないまま**返っていた。
+    # 分類は英語を要求するので（core/stt.py:158-162）、混在音声の
+    # 分類精度が落ちる経路になっていた。ルール1が英語をそのまま残す
 
     from google.genai import types
 
@@ -280,13 +300,20 @@ def translate_to_en(text: str, code: Optional[str] = None) -> str:
 
 
 def run(file_path: str) -> tuple:
-    """音声 → (原文, 英訳, 判定した言語)。
+    """音声 → (原文, 英訳, "")。
 
-    ① 言語を判定 → ② その言語で文字起こし → ③ 英訳
+    ① 文字起こし（**話されている言語のまま**）→ ② 英訳
 
-    Gemini の呼び出し回数は **1（判定）＋チャンク数（文字起こし）＋1（英訳）**。
-    30秒ごとに切るので、音声が長いほど増える（5分で13回）。
+    Gemini の呼び出しは **チャンク数（文字起こし）＋1（英訳）**。
+    5分までの音声なら **2回**で済む。
     同期処理なので、呼ぶ側で別スレッドに逃がす（core/stt.py）。
+
+    ⚠️ **detect_lang は呼ばない**（2026-11-23変更）。
+    ① 文字起こしで言語を指定しない ② 英訳の短絡をやめた
+    の2つで、判定結果の使い道が無くなった。呼び出し側も捨てている
+    （core/stt.py:101 の `_code`）。返り値の3番目は常に `""`。
+    🔴 5分チャンクでは**判定だけで 9.6MB 送ることになる。**
+    関数自体は stt.detect_lang として残してある（別用途のため）。
 
     ⚠️ **前処理と分割は1回だけ**（2026-10-26変更）。以前は detect_lang と
     transcribe がそれぞれ `_chunks()` を呼んでいたので、**重いDSP処理が
@@ -294,13 +321,13 @@ def run(file_path: str) -> tuple:
     """
     chunks, wav = _prepare(file_path)
     try:
-        code = detect_lang(file_path, chunks=chunks)
-        original = transcribe(file_path, code, chunks=chunks)
+        original = transcribe(file_path, chunks=chunks)
         if not original:
-            return "", "", code
+            # ⚠️ 3つ返す。transcribe_with_lang が3つで受けている
+            return "", "", ""
 
-        english = translate_to_en(original, code)
-        return original, english, code
+        english = translate_to_en(original)
+        return original, english, ""
     finally:
         # ⚠️ **必ず消す。** 消さないと5分の音声1本で約20MB残る
         _cleanup(chunks, wav)

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import logging
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from v2_app.core import session, telegram, user_repo
 from v2_app.router.dispatcher import Incoming
@@ -85,6 +85,16 @@ def label(en: str, km: str) -> str:
     """ボタンの文字。英語 / クメール語 を1行に並べる。"""
     return f"{en} / {km}" if km else en
 
+START_EN = "Start"
+START_KM = "ចាប់ផ្តើម"
+START_LABEL = label(START_EN, START_KM)
+
+def start_keyboard() -> dict:
+    return telegram.reply_keyboard([[START_LABEL]])
+
+def is_start_button(text: str) -> bool:
+    return text.strip() == START_LABEL
+
 
 async def show(inc: Incoming, user: Dict[str, Any]) -> None:
     """モード選択を出す。route が無い時に dispatcher が呼ぶ。
@@ -150,14 +160,54 @@ async def _start_mode(inc: Incoming, route: str) -> None:
         await telegram.send_message(inc.chat_id, t("still_saving"))
         return
 
-    # 押したボタンを消す。あとから押し直せないように
-    if inc.message_id:
-        await telegram.edit_message_text(
-            inc.chat_id, inc.message_id, _chosen_label(route)
-        )
+    # 🔴 **書き換えず、消して1通送る**（2026-11-23変更）。
+    #
+    # リプライキーボードは**メッセージに添えてしか操作できない。**
+    # editMessageText に渡せる reply_markup は inline キーボードだけなので、
+    # 「Now you are on 〜」への書き換えでは **Start ボタンを消せない。**
+    # 別便で消すと吹き出しが2つになるので、モード選択の吹き出しを消し、
+    # 「Now you are on 〜」＋ モードの入り口の文 ＋ Start の除去を
+    # **同じ1通**に載せる。
+    #
+    # ⚠️ 消す順番を先にする。送信を先にすると、その間インラインボタンが
+    # 押せる状態が残り、別のモードを押されるとセッションが上書きされる。
+    #
+    # ⚠️ is_callback で囲う（A-3 / 2026-11-19）。消してよいのは
+    # **Bot が送ったメッセージ**だけ。テキストから直接ここへ来た場合の
+    # message_id は**先生自身のメッセージ**なので触ってはいけない
+    if inc.is_callback and inc.message_id:
+        await telegram.delete_message(inc.chat_id, inc.message_id)
 
+    # ⚠️ **送る前にセッションを作る。** 入り口の文を履歴に積むため
+    # （append_history はセッションがある前提）。今までは base.py が
+    # 入り口の1通を履歴に入れていたので、ここで揃えないと
+    # ask.py が見る履歴から1行欠ける
     session.new_session(route, inc.telegram_id, entry["fields"])
     log.info("[6] new_session した route=%s", route)
+
+    text = _chosen_label(route)
+    prompt = _opening_text(entry.get("opening"))
+    if prompt:
+        text = f"{text}\n\n{prompt}"
+
+    # 🔴 **Start を消すのはこの1通だけ。** 送らないと記録中も Start が
+    # 残り、押すと /new に読み替えられて（dispatcher.py）
+    # **書きかけのセッションが消える。**
+    #
+    # ⚠️ **ただし settings では消さない。** settings は記録を書かないので
+    # 保存後の2通目（base.py の _finish_notice）が走らず、
+    # **消すと Start が戻らない。** 先生は /start を手で打つしかなくなり、
+    # ①の目的（コマンドを打たせない）に反する。
+    # 記録が無いので、途中で Start を押されて失うものも無い
+    await telegram.send_message(
+        inc.chat_id,
+        text,
+        reply_markup=(
+            None if route == "settings" else telegram.remove_reply_keyboard()
+        ),
+    )
+    if prompt:
+        session.append_history(route, inc.telegram_id, "assistant", prompt)
 
     # ⚠️ ボタンのイベントをそのまま handler に渡してはいけない。
     # base.handle は callback を見ると「保存か追加か」を調べ、
@@ -189,6 +239,43 @@ def _chosen_label(route: str) -> str:
     return route
 
 
+def _opening_text(opening: Optional[Dict[str, str]]) -> str:
+    """モードの入り口の文。持たないモードは空文字（2026-11-23追加）。
+
+    registry が各モードの `OPENING` を拾って ROUTES に入れている。
+    空なら「Now you are on 〜」だけを送り、入り口の質問は
+    従来どおり base.py が次の1通で出す。
+    """
+    if not opening:
+        return ""
+    en, km = opening.get("en", ""), opening.get("km", "")
+    return f"{en}\n{km}" if km else en
+
+
+def _clear_if_idle(telegram_id: int) -> bool:
+    """セッションを消す。**保存が裏で走っている間は消さない。**
+
+    🔴 base.py の _save_background は、保存が終わるまで Redis の
+    セッションを唯一の情報源として読み直す（_filled）。ここで消すと
+    **空のレコードが Notion に書かれる。** 先生には「保存しました」と
+    内容まで表示済みなので、本人は書けたと思っている。
+
+    _start_mode には同じガードがあるが handle_command には無かった。
+    Start ボタン（押された文字を /new に読み替える）を置くと
+    **この経路がいちばん踏まれやすくなる**ので先に塞ぐ（2026-11-19）。
+
+    返り値: 消したか（False = 保存中だったので何もしなかった）
+    """
+    if session.has_lock("save", telegram_id):
+        log.info("保存中なのでセッションを消さない telegram_id=%s", telegram_id)
+        return False
+
+    route = session.get_route(telegram_id)
+    if route:
+        session.clear_session(route, telegram_id)
+    return True
+
+
 async def handle_command(inc: Incoming, user: Dict[str, Any]) -> None:
     """/start /cancel /help。route より優先して処理される。
 
@@ -198,17 +285,22 @@ async def handle_command(inc: Incoming, user: Dict[str, Any]) -> None:
 
     # ⚠️ /start も受ける。Telegramが初回に必ず表示するボタンなので、
     # 無効にすると新しい先生が入口を失う
+    #
+    # 保存中でも**ここでは止めない。** 詰まった時にここから抜け出せる
+    # ことを守りたい。モードを押した時点で _start_mode が still_saving で
+    # 止めるので、空のレコードは書かれない
     if cmd in ("/new", "/start", "/menu"):
-        route = session.get_route(inc.telegram_id)
-        if route:
-            session.clear_session(route, inc.telegram_id)
+        _clear_if_idle(inc.telegram_id)
         await show(inc, user)
         return
 
     if cmd == "/cancel":
-        route = session.get_route(inc.telegram_id)
-        if route:
-            session.clear_session(route, inc.telegram_id)
+        # 保存が始まったものは取り消せないので、cancelled
+        # （「何も保存されていません」）と言うのは嘘になる
+        if not _clear_if_idle(inc.telegram_id):
+            await telegram.send_message(inc.chat_id, t("still_saving"))
+            await show(inc, user)
+            return
         await telegram.send_message(inc.chat_id, t("cancelled"))
         await show(inc, user)
         return

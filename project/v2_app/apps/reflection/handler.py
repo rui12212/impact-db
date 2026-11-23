@@ -53,4 +53,13 @@ async def handle(inc: Incoming, user: Dict[str, Any]) -> None:
         accumulate="note",
         # 保存の直前に教科を抜く
         before_save=before_save,
+        # 入り口の1通は menu.py が「Now you are on 〜」と
+        # schema.OPENING をまとめて出す（Start の除去もそこ）
+        greet=False,
+        # 🔴 **掛け合い（LLMの深掘り）をしない**（2026-11-16 §12 決定）。
+        # メモ機能と分けたことで、**整理された内容が溜まることの方が
+        # 大事**と判断した。デイリーリフレクションは
+        # **整理した内容を入れる箱**として運用する
+        # → .claude/topics/meeting/2026-11-16.md §12
+        followup=False,
     )
